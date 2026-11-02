@@ -19,6 +19,7 @@ const TokenDetector = {
   ERC20_VOTES: ['getVotes(address)', 'getPastVotes(address,uint256)', 'getPastTotalSupply(uint256)'],
   HAS_DELEGATE: ['delegate(address)'],
   ESCROW_ADAPTER: ['escrow()', 'clock()'],
+  BONDED_VOTES: ['delegateBonded(address)', 'acceptBonded(address)', 'dropBonded(address)', 'bondedDelegate(address)'],
   ERC20: [
     'totalSupply()',
     'balanceOf(address)',
@@ -123,6 +124,9 @@ const TokenDetector = {
         contractDetails.type = ITokenType.ERC1155
       } else if (hasFunctions(TokenDetector.ERC777)) {
         contractDetails.type = ITokenType.ERC777
+      } else if (hasFunctions(TokenDetector.BONDED_VOTES)) {
+        // before ESCROW_ADAPTER: BondedVotes also exposes escrow() and clock()
+        contractDetails.type = ITokenType.bondedVotes
       } else if (hasFunctions(TokenDetector.ESCROW_ADAPTER)) {
         contractDetails.type = ITokenType.escrowAdapter
       }

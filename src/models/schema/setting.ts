@@ -335,12 +335,11 @@ export default class Setting extends Model {
   @prop({ type: () => String })
   public minProposerVotingPower!: string
 
-  // CRISP only: the voting power a member needs at the snapshot to submit an encrypted ballot.
+  // CRISP only: voting power needed to submit an encrypted ballot
   @prop({ type: () => String })
   public minVoterVotingPower!: string
 
-  // CRISP only: the E3 request parameters future proposals are created with
-  // (IInterfold.CommitteeSize enum value and the BFV parameter-set identifier).
+  // CRISP only: E3 request parameters (committee size enum, BFV parameter set) for new proposals
   @prop({ type: () => Number })
   public committeeSize!: number
 

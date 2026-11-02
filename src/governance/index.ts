@@ -3,7 +3,7 @@ import logger from '@logger'
 import type Member from '@models/schema/member'
 import type Plugin from '@models/schema/plugin'
 import DbTx from '@modules/dbTx'
-import { type HexAddress, IPluginInterfaceType, ITokenType, type NetworksEnum } from '@types'
+import { type HexAddress, IPluginInterfaceType, ITokenType, type NetworksEnum, TokenVotingTypes } from '@types'
 import { AdminGovernance } from './adminGovernance'
 import { BaseGovernance } from './baseGovernance'
 import { CapitalDistributorGovernance } from './capitalDistributorGovernance'
@@ -76,18 +76,14 @@ export class MemberGovernanceFactory {
   // Implementation - returns union of all types
   static createFromPlugin(plugin: Plugin): GovernanceType {
     try {
-      // Handle token voting plugins. CRISP shares the whole path: only the ballots are encrypted,
-      // the electorate and its token (ERC20Votes or an escrow adapter) are the same.
-      if (
-        plugin.interfaceType === IPluginInterfaceType.tokenVoting ||
-        plugin.interfaceType === IPluginInterfaceType.crisp
-      ) {
+      // Handle token voting plugins
+      if (TokenVotingTypes.includes(plugin.interfaceType)) {
         // Check if it's VE governance (has votingEscrow configuration)
         if (plugin.votingEscrow?.escrowAddress) {
           return MemberGovernanceFactory.create({
             address: plugin.votingEscrow.escrowAddress,
             network: plugin.network,
-            interfaceType: plugin.interfaceType,
+            interfaceType: IPluginInterfaceType.tokenVoting,
             tokenType: ITokenType.escrowAdapter,
             extraParams: {
               escrowAdapterAddress: plugin.tokenAddress,
@@ -99,7 +95,7 @@ export class MemberGovernanceFactory {
           return MemberGovernanceFactory.create({
             address: plugin.tokenAddress,
             network: plugin.network,
-            interfaceType: plugin.interfaceType,
+            interfaceType: IPluginInterfaceType.tokenVoting,
           })
         }
       }
@@ -173,7 +169,6 @@ export class MemberGovernanceFactory {
     }
   }): GovernanceType {
     switch (params.interfaceType) {
-      case IPluginInterfaceType.crisp:
       case IPluginInterfaceType.tokenVoting:
         switch (params.tokenType) {
           case ITokenType.escrowAdapter:

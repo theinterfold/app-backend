@@ -6,7 +6,7 @@ import logger from '@logger'
 import type MemberLock from '@models/schema/lock'
 import type Plugin from '@models/schema/plugin'
 import { MemberGovernanceFactory, VeGovernance } from '@src/governance'
-import { type ILogInfo, IPluginInterfaceType, ITokenType, IVotingEscrowAdapterLogs } from '@types'
+import { type ILogInfo, IPluginInterfaceType, ITokenType, IVotingEscrowAdapterLogs, TokenVotingTypes } from '@types'
 import { Interface, type LogDescription } from 'ethers'
 
 const llo = logger.logMeta.bind(null, { service: 'handlers:GovernanceVeHandler' })
@@ -16,9 +16,7 @@ export const GovernanceVeHandler = {
     const plugins = await Models.Plugin.find({
       tokenAddress: info.address,
       network: info.network,
-      interfaceType: {
-        $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
-      },
+      interfaceType: { $in: [...TokenVotingTypes, IPluginInterfaceType.gauge] },
     })
 
     if (!plugins || plugins.length === 0) return
@@ -114,9 +112,7 @@ export const GovernanceVeHandler = {
     const plugins = await Models.Plugin.find({
       tokenAddress: info.address,
       network: info.network,
-      interfaceType: {
-        $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
-      },
+      interfaceType: { $in: [...TokenVotingTypes, IPluginInterfaceType.gauge] },
     })
     if (!plugins || plugins.length === 0) return
 

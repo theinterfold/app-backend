@@ -507,11 +507,7 @@ class DecodeActions {
     }
   }
 
-  /**
-   * CrispVoting `updateVotingSettings((minProposerVotingPower, minVoterVotingPower,
-   * minParticipation, supportThreshold, minDuration))`. Percentages are out of 100, not ppm, and
-   * there is no voting mode.
-   */
+  // Percentages are out of 100 (not ppm) and there is no voting mode
   async _parseCrispVotingSettingUpdateAction(
     decodedData: IProposalActionInputData,
     action: IRawAction,
@@ -526,11 +522,11 @@ class DecodeActions {
 
     const existingSettings = activeSettings
       ? {
-          minProposerVotingPower: activeSettings?.minProposerVotingPower,
-          minVoterVotingPower: activeSettings?.minVoterVotingPower,
-          minParticipation: activeSettings?.minParticipation,
-          supportThreshold: activeSettings?.supportThreshold,
-          minDuration: activeSettings?.minDuration,
+          minProposerVotingPower: activeSettings.minProposerVotingPower,
+          minVoterVotingPower: activeSettings.minVoterVotingPower,
+          minParticipation: activeSettings.minParticipation,
+          supportThreshold: activeSettings.supportThreshold,
+          minDuration: activeSettings.minDuration,
           token: votingToken?.pickFields(),
         }
       : {}
