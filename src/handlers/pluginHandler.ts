@@ -306,7 +306,10 @@ export const PluginHandler = {
     document.interfaceType = pluginInfo?.type
     document.isObjection = !!pluginInfo?.isObjection
 
-    if (document.interfaceType === IPluginInterfaceType.tokenVoting) {
+    if (
+      document.interfaceType === IPluginInterfaceType.tokenVoting ||
+      document.interfaceType === IPluginInterfaceType.crisp
+    ) {
       // maybe the token is not a erc20 governance
       document.tokenAddress = plugin.tokenAddress
     }
@@ -390,6 +393,7 @@ export const PluginHandler = {
 
         if (
           document.interfaceType === IPluginInterfaceType.tokenVoting ||
+          document.interfaceType === IPluginInterfaceType.crisp ||
           document.interfaceType === IPluginInterfaceType.gauge
         ) {
           document.tokenAddress = pluginLog.tokenAddress
@@ -613,8 +617,9 @@ export const PluginHandler = {
     }
 
     if (
-      newPlugin.interfaceType === IPluginInterfaceType.tokenVoting &&
-      previousPlugin.interfaceType === IPluginInterfaceType.tokenVoting &&
+      (newPlugin.interfaceType === IPluginInterfaceType.tokenVoting ||
+        newPlugin.interfaceType === IPluginInterfaceType.crisp) &&
+      newPlugin.interfaceType === previousPlugin.interfaceType &&
       !newPlugin.tokenAddress &&
       previousPlugin.tokenAddress
     ) {

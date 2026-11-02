@@ -1,3 +1,4 @@
+import { CrispVoting } from '@artifacts/CrispVoting'
 import { DAO } from '@artifacts/dao'
 import { ERC20 } from '@artifacts/ERC20'
 import { ERC721 } from '@artifacts/ERC721'
@@ -557,6 +558,45 @@ const Web3Helper = {
       )
     } catch (error) {
       logger.warn('Error getting voting settings', llo({ error, address, blockNumber }))
+      return null
+    }
+  },
+
+  /**
+   * Reads CrispVoting's settings views at `blockNumber` (latest when omitted): the voting
+   * settings, and the E3 request parameters (committee size, BFV parameter set) that
+   * `initialize` writes without emitting an event.
+   */
+  async getCrispSettings(address: HexAddress, network: NetworksEnum, blockNumber?: number) {
+    try {
+      const provider = ProviderModule.getAnyRpcProvider(network)
+      const contract = new Contract(address, CrispVoting.abi, provider)
+      const blockTag = blockNumber === undefined ? {} : { blockTag: blockNumber }
+
+      return await retryRequest(async () =>
+        BottleneckModule.getNodeLimiter(network).schedule(async () => {
+          const [minProposerVotingPower, minVoterVotingPower, minParticipation, supportThreshold, minDuration, e3] =
+            await Promise.all([
+              contract.minProposerVotingPower(blockTag),
+              contract.minVoterVotingPower(blockTag),
+              contract.minParticipation(blockTag),
+              contract.supportThreshold(blockTag),
+              contract.minDuration(blockTag),
+              contract.getE3Settings(blockTag),
+            ])
+          return {
+            minProposerVotingPower: minProposerVotingPower as bigint,
+            minVoterVotingPower: minVoterVotingPower as bigint,
+            minParticipation: Number(minParticipation),
+            supportThreshold: Number(supportThreshold),
+            minDuration: Number(minDuration),
+            committeeSize: Number(e3[0]),
+            paramSet: Number(e3[1]),
+          }
+        }),
+      )
+    } catch (error) {
+      logger.warn('Error getting crisp settings', llo({ error, address, blockNumber }))
       return null
     }
   },

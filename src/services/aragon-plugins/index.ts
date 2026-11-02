@@ -6,6 +6,7 @@ import { LogGauge } from '@plugins/logGauge'
 import { LogPolicy } from '@plugins/logPolicy'
 import { LogAdmin } from '@services/aragon-plugins/logAdmin'
 import { LogCapitalDistributor } from '@services/aragon-plugins/logCapitalDistributor'
+import { LogCrisp } from '@services/aragon-plugins/logCrisp'
 import { LogCrossChain } from '@services/aragon-plugins/logCrossChain'
 import { LogDao } from '@services/aragon-plugins/logDao'
 import { LogDelegateChanged } from '@services/aragon-plugins/logDelegateChanged'
@@ -121,6 +122,29 @@ const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => 
           await LogTokenVoting.start(plugin, token, isHistorical)
         } else {
           logger.warn('Sync plugin token not supported', llo({ plugin: plugin?.address, token: token?.address }))
+        }
+        break
+      }
+      case IPluginInterfaceType.crisp: {
+        const token = await Models.Token.findOne({
+          address: plugin.tokenAddress,
+          network: plugin.network,
+        })
+
+        // Same token gate as token voting — ERC20Votes, ERC721Votes or an escrow adapter such as
+        // BondedVotes (what deployed CRISP plugins vote with) — and for the same reason: without
+        // delegation there is no snapshot to prove a ballot against.
+        if (
+          (token?.type === ITokenType.ERC20 ||
+            token?.type === ITokenType.ERC721 ||
+            token?.type === ITokenType.escrowAdapter) &&
+          token?.isGovernance &&
+          token?.hasDelegate
+        ) {
+          logger.info('Sync crisp plugin', llo({ plugin: plugin.address, token: token.address, tokenType: token.type }))
+          await LogCrisp.start(plugin, token, isHistorical)
+        } else {
+          logger.warn('Sync crisp plugin token not supported', llo({ plugin: plugin?.address, token: token?.address }))
         }
         break
       }

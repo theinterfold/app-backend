@@ -426,6 +426,194 @@ describe('Indexer: PluginSettingHandler', () => {
     })
   })
 
+  describe('crispSettingsUpdated', () => {
+    const parsedEvent = {
+      args: {
+        minProposerVotingPower: 10n,
+        minVoterVotingPower: 5n,
+        minParticipation: 15n,
+        supportThreshold: 50n,
+        minDuration: 86_400n,
+      },
+    }
+
+    const info = {
+      address: '0x456',
+      transactionHash: '0x789',
+      blockNumber: 1,
+      transactionIndex: 1,
+      logIndex: 1,
+      network: NetworksEnum.ethereumMainnet,
+    }
+
+    it('should return if plugin not found', async () => {
+      const stubFindByAddress = sandbox.stub(Models.Plugin, 'findByAddress').resolves(false)
+      const stubLogger = sandbox.stub(logger, 'warn')
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      expect(stubFindByAddress.calledOnce).to.be.true
+      expect(stubLogger.calledOnceWith('Plugin not found' as any)).to.be.true
+    })
+
+    it('should return when the plugin is not a crisp plugin', async () => {
+      // The event name is shared with TokenVoting and LockToVote but the signature is not, so a
+      // handler that ran against the wrong plugin type would write nonsense settings.
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.tokenVoting,
+        tokenAddress: '0x123',
+      })
+      const stubFindExistingLog = sandbox.stub(Models.Setting, 'findExistingLog').resolves(false)
+      const stubWarn = sandbox.stub(logger, 'warn')
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      expect(stubWarn.calledOnceWith('Plugin is not a crisp voting plugin' as any)).to.be.true
+      expect(stubFindExistingLog.called).to.be.false
+    })
+
+    it('should return if already existing log', async () => {
+      const stubFindByAddress = sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.crisp,
+        tokenAddress: '0x123',
+      })
+      const stubFindExistingLog = sandbox.stub(Models.Setting, 'findExistingLog').resolves(true)
+      const stubFindActive = sandbox.stub(Models.Setting, 'findActive').resolves(false)
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      expect(stubFindByAddress.calledOnce).to.be.true
+      expect(stubFindExistingLog.calledOnce).to.be.true
+      expect(stubFindActive.called).to.be.false
+    })
+
+    it('should store the crisp settings', async () => {
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.crisp,
+        tokenAddress: '0x123',
+        daoAddress: '0xdao',
+        network: NetworksEnum.ethereumMainnet,
+      })
+      sandbox.stub(Models.Setting, 'findExistingLog').resolves(false)
+      sandbox.stub(Models.Setting, 'findActive').resolves(false)
+      sandbox.stub(logger, 'verbose')
+      sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(123123123)
+      const getCrispSettingsStub = sandbox
+        .stub(Web3Helper, 'getCrispSettings')
+        .resolves({ committeeSize: 1, paramSet: 2 } as any)
+      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({
+        type: ITokenType.ERC20,
+        isGovernance: true,
+      } as any)
+      sandbox.stub(PluginSettingHandler, 'isSupported').resolves()
+      const createDocumentStub = sandbox.stub(DbOperations, 'createDocument').resolves({} as any)
+      sandbox.stub(Models.Plugin, 'findOne').resolves(null as any)
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      const settingLog = createDocumentStub.firstCall.args[1] as any
+      expect(getCrispSettingsStub.calledOnceWith('0x456' as any, NetworksEnum.ethereumMainnet, 1)).to.be.true
+      expect(settingLog.minParticipation).to.equal(15)
+      expect(settingLog.supportThreshold).to.equal(50)
+      expect(settingLog.minDuration).to.equal(86_400)
+      expect(settingLog.minProposerVotingPower).to.equal('10')
+      expect(settingLog.minVoterVotingPower).to.equal('5')
+      expect(settingLog.committeeSize).to.equal(1)
+      expect(settingLog.paramSet).to.equal(2)
+    })
+
+    it('should keep the previous E3 parameters when the contract read fails', async () => {
+      // CRISP has no early execution, so writing a voting mode would invent a setting the
+      // contract does not have.
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.crisp,
+        tokenAddress: '0x123',
+        daoAddress: '0xdao',
+        network: NetworksEnum.ethereumMainnet,
+      })
+      sandbox.stub(Models.Setting, 'findExistingLog').resolves(false)
+      sandbox.stub(Models.Setting, 'findActive').resolves({ id: 'setting-1', committeeSize: 0, paramSet: 3 } as any)
+      sandbox.stub(DbOperations, 'updateDocument').resolves({} as any)
+      sandbox.stub(logger, 'verbose')
+      sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(123123123)
+      sandbox.stub(Web3Helper, 'getCrispSettings').resolves(null)
+      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({ type: ITokenType.ERC20 } as any)
+      const createDocumentStub = sandbox.stub(DbOperations, 'createDocument').resolves({} as any)
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      const settingLog = createDocumentStub.firstCall.args[1] as any
+      expect(settingLog.committeeSize).to.equal(0)
+      expect(settingLog.paramSet).to.equal(3)
+      expect(settingLog.votingMode).to.be.undefined
+    })
+
+    it('should deactivate the previous active setting', async () => {
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.crisp,
+        tokenAddress: '0x123',
+        daoAddress: '0xdao',
+        network: NetworksEnum.ethereumMainnet,
+      })
+      sandbox.stub(Models.Setting, 'findExistingLog').resolves(false)
+      sandbox.stub(Models.Setting, 'findActive').resolves({ id: 'setting-1' } as any)
+      sandbox.stub(logger, 'verbose')
+      sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(123123123)
+      sandbox.stub(Web3Helper, 'getCrispSettings').resolves(null)
+      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({ type: ITokenType.ERC20 } as any)
+      sandbox.stub(DbOperations, 'createDocument').resolves({} as any)
+      const updateDocumentStub = sandbox.stub(DbOperations, 'updateDocument').resolves({} as any)
+
+      await PluginSettingHandler.crispSettingsUpdated(parsedEvent as any, info as any)
+
+      expect(updateDocumentStub.calledOnce).to.be.true
+      expect((updateDocumentStub.firstCall.args[1] as any).status).to.equal(ISettingStatus.inactive)
+    })
+  })
+
+  describe('crispE3SettingsUpdated', () => {
+    const parsedEvent = { args: { committeeSize: 1n, paramSet: 2n } }
+    const info = {
+      address: '0x456',
+      transactionHash: '0x789',
+      blockNumber: 10,
+      network: NetworksEnum.ethereumMainnet,
+    }
+
+    it('should ignore plugins that are not crisp', async () => {
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({ interfaceType: IPluginInterfaceType.tokenVoting })
+      const findActiveStub = sandbox.stub(Models.Setting, 'findActive')
+      sandbox.stub(logger, 'warn')
+
+      await PluginSettingHandler.crispE3SettingsUpdated(parsedEvent as any, info as any)
+
+      expect(findActiveStub.called).to.be.false
+    })
+
+    it('should update the active setting in place', async () => {
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({ interfaceType: IPluginInterfaceType.crisp })
+      const active = { id: 'setting-1', blockNumber: 5 }
+      sandbox.stub(Models.Setting, 'findActive').resolves(active as any)
+      const updateDocumentStub = sandbox.stub(DbOperations, 'updateDocument').resolves({} as any)
+
+      await PluginSettingHandler.crispE3SettingsUpdated(parsedEvent as any, info as any)
+
+      expect(updateDocumentStub.calledOnce).to.be.true
+      expect(updateDocumentStub.firstCall.args[0]).to.equal(active)
+      expect(updateDocumentStub.firstCall.args[1]).to.deep.equal({ committeeSize: 1, paramSet: 2 })
+    })
+
+    it('should not touch a setting created after the event', async () => {
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({ interfaceType: IPluginInterfaceType.crisp })
+      sandbox.stub(Models.Setting, 'findActive').resolves({ id: 'setting-2', blockNumber: 11 } as any)
+      const updateDocumentStub = sandbox.stub(DbOperations, 'updateDocument').resolves({} as any)
+
+      await PluginSettingHandler.crispE3SettingsUpdated(parsedEvent as any, info as any)
+
+      expect(updateDocumentStub.called).to.be.false
+    })
+  })
+
   describe('votingSettingsUpdated', () => {
     it('should return if plugin not found', async () => {
       const parsedEvent = {

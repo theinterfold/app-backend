@@ -469,6 +469,9 @@ export const PluginSetupProcessorHandler = {
   findAndUpdateTokenAddress: async (pluginDb: Plugin, info: ILogInfo): Promise<Plugin> => {
     let tokenAddress: any = null
     switch (pluginDb.interfaceType) {
+      // CrispVoting exposes the canonical getVotingToken(), so the token is resolved the same
+      // way as for token voting even though the ballots are encrypted.
+      case IPluginInterfaceType.crisp:
       case IPluginInterfaceType.tokenVoting:
         tokenAddress = await Web3Helper.getVotingToken(pluginDb.address, info.network)
         break

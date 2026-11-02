@@ -76,14 +76,18 @@ export class MemberGovernanceFactory {
   // Implementation - returns union of all types
   static createFromPlugin(plugin: Plugin): GovernanceType {
     try {
-      // Handle token voting plugins
-      if (plugin.interfaceType === IPluginInterfaceType.tokenVoting) {
+      // Handle token voting plugins. CRISP shares the whole path: only the ballots are encrypted,
+      // the electorate and its token (ERC20Votes or an escrow adapter) are the same.
+      if (
+        plugin.interfaceType === IPluginInterfaceType.tokenVoting ||
+        plugin.interfaceType === IPluginInterfaceType.crisp
+      ) {
         // Check if it's VE governance (has votingEscrow configuration)
         if (plugin.votingEscrow?.escrowAddress) {
           return MemberGovernanceFactory.create({
             address: plugin.votingEscrow.escrowAddress,
             network: plugin.network,
-            interfaceType: IPluginInterfaceType.tokenVoting,
+            interfaceType: plugin.interfaceType,
             tokenType: ITokenType.escrowAdapter,
             extraParams: {
               escrowAdapterAddress: plugin.tokenAddress,
@@ -95,7 +99,7 @@ export class MemberGovernanceFactory {
           return MemberGovernanceFactory.create({
             address: plugin.tokenAddress,
             network: plugin.network,
-            interfaceType: IPluginInterfaceType.tokenVoting,
+            interfaceType: plugin.interfaceType,
           })
         }
       }
@@ -169,6 +173,7 @@ export class MemberGovernanceFactory {
     }
   }): GovernanceType {
     switch (params.interfaceType) {
+      case IPluginInterfaceType.crisp:
       case IPluginInterfaceType.tokenVoting:
         switch (params.tokenType) {
           case ITokenType.escrowAdapter:

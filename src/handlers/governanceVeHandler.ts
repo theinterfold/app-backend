@@ -16,7 +16,9 @@ export const GovernanceVeHandler = {
     const plugins = await Models.Plugin.find({
       tokenAddress: info.address,
       network: info.network,
-      interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.gauge] },
+      interfaceType: {
+        $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
+      },
     })
 
     if (!plugins || plugins.length === 0) return
@@ -112,7 +114,9 @@ export const GovernanceVeHandler = {
     const plugins = await Models.Plugin.find({
       tokenAddress: info.address,
       network: info.network,
-      interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.gauge] },
+      interfaceType: {
+        $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
+      },
     })
     if (!plugins || plugins.length === 0) return
 

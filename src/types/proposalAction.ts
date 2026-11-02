@@ -15,6 +15,7 @@ export enum ProposalActionType {
   UpdateMultiSigSettings = 'UpdateMultiSigSettings',
   UpdateTokenVoteSettings = 'UpdateTokenVoteSettings',
   UpdateLockToVoteVoteSettings = 'UpdateLockToVoteVoteSettings',
+  UpdateCrispVoteSettings = 'UpdateCrispVoteSettings',
   StagesUpdated = 'StagesUpdated',
   MetadataPluginUpdate = 'MetadataPluginUpdate',
   RegisterGauge = 'RegisterGauge',

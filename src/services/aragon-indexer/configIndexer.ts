@@ -17,6 +17,7 @@ import {
   RouterSourceFactory,
   StreamBalanceSource,
 } from '@artifacts/CapitalRouter'
+import { CrispVoting } from '@artifacts/CrispVoting'
 import { CrossChainController } from '@artifacts/CrossChainController'
 import { CrossChainExecuteSelectorCondition } from '@artifacts/CrossChainExecuteSelectorCondition'
 import { DAO } from '@artifacts/dao'
@@ -170,9 +171,13 @@ const IndexerEventConfig: IIndexerConfig[] = [
   {
     event: 'VotingSettingsUpdated',
     enableHistorical: false,
+    // Three different event signatures share this name, so each carries its own topic hash and
+    // its own decoding ABI. CrispVoting's is
+    // `(minProposerVotingPower, minVoterVotingPower, minParticipation, supportThreshold, minDuration)`.
     topic: [
       new Interface(TokenVoting.abi).getEvent('VotingSettingsUpdated')?.topicHash!,
       new Interface(LockToVote.abi).getEvent('VotingSettingsUpdated')?.topicHash!,
+      new Interface(CrispVoting.abi).getEvent('VotingSettingsUpdated')?.topicHash!,
     ],
     config: [
       {
@@ -182,6 +187,21 @@ const IndexerEventConfig: IIndexerConfig[] = [
       {
         abi: LockToVote.abi,
         handler: PluginSettingHandler.votingSettingsUpdated,
+      },
+      {
+        abi: CrispVoting.abi,
+        handler: PluginSettingHandler.crispSettingsUpdated,
+      },
+    ],
+  },
+  {
+    event: 'E3SettingsUpdated',
+    enableHistorical: false,
+    topic: new Interface(CrispVoting.abi).getEvent('E3SettingsUpdated')?.topicHash!,
+    config: [
+      {
+        abi: CrispVoting.abi,
+        handler: PluginSettingHandler.crispE3SettingsUpdated,
       },
     ],
   },

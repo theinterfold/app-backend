@@ -41,6 +41,7 @@ export enum IPluginStatus {
 export enum IPluginSlug {
   locktovote = 'locktovote',
   tokenvoting = 'tokenvoting',
+  crisp = 'crisp',
   multisig = 'multisig',
   admin = 'admin',
   gauge = 'gauge',
@@ -66,6 +67,7 @@ export enum IPluginInterfaceType {
   gauge = 'gauge',
   unknown = 'unknown',
   lockToVote = 'lockToVote',
+  crisp = 'crisp',
   capitalDistributor = 'capitalDistributor',
   router = 'router',
   claimer = 'claimer',
