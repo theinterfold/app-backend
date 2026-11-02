@@ -80,6 +80,9 @@ export enum IConditionInterfaceType {
   sppRule = 'spp-rule',
 }
 
+// Plugins whose electorate is a delegated token; CRISP differs from token voting only by its encrypted ballots
+export const TokenVotingTypes = [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp]
+
 export enum IEventLogCrossChainSettings {
   ConfigUpdated = 'ConfigUpdated',
   ExecutorUpdated = 'ExecutorUpdated',

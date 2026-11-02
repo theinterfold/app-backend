@@ -10,7 +10,7 @@ import type PluginSetting from '@models/schema/setting'
 import { ProxyToken } from '@modules/proxyToken'
 import SafeBodyMembersModule from '@modules/safe/safeBodyMembers'
 import SafeProcessModule from '@modules/safe/safeProcess'
-import { type HexAddress, IPluginInterfaceType, IPluginStatus, type NetworksEnum } from '@types'
+import { type HexAddress, IPluginInterfaceType, IPluginStatus, type NetworksEnum, TokenVotingTypes } from '@types'
 
 const llo = logger.logMeta.bind(null, { service: 'gateway:MemberInfo' })
 
@@ -60,11 +60,7 @@ export const MemberInfo = {
               status: IPluginStatus.installed,
             })
           : await Models.Plugin.findByAddress(pluginAddress, network)
-        if (
-          !plugin ||
-          (plugin.interfaceType !== IPluginInterfaceType.tokenVoting &&
-            plugin.interfaceType !== IPluginInterfaceType.crisp)
-        ) {
+        if (!plugin || !TokenVotingTypes.includes(plugin.interfaceType)) {
           return response
         }
         tokenAddress = plugin.tokenAddress
@@ -138,8 +134,6 @@ export const MemberInfo = {
       switch (plugin.interfaceType) {
         case IPluginInterfaceType.lockToVote:
           return await MemberInfo._checkForLockToVote(plugin, settings, memberAddress)
-        // Proposal creation is gated the same way for CRISP: voting power against
-        // minProposerVotingPower. Only the ballot is different.
         case IPluginInterfaceType.crisp:
         case IPluginInterfaceType.tokenVoting:
           return await MemberInfo._checkForTokenVoting(plugin, settings, memberAddress)

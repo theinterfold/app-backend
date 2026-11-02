@@ -109,6 +109,16 @@ describe('Helper: TokenDetector', () => {
     expect(getImplementationAddressStub.calledWith('0xAddress', NetworksEnum.ethereumMainnet)).to.be.true
   })
 
+  it('should detect bondedVotes before escrowAdapter, as BondedVotes also exposes escrow() and clock()', async () => {
+    sandbox.stub(ProxyContractHelper, 'getImplementationAddress').resolves(null)
+    sandbox
+      .stub(ContractHelper, 'getBytecode')
+      .resolves(simulateBytecodeForFunctions([...TokenDetector.ESCROW_ADAPTER, ...TokenDetector.BONDED_VOTES]))
+
+    const result = await TokenDetector.detectTokenType('0xAddress', NetworksEnum.ethereumMainnet)
+    expect(result.type).to.equal(ITokenType.bondedVotes)
+  })
+
   it('should detect unknown token', async () => {
     sandbox.stub(ProxyContractHelper, 'getImplementationAddress').resolves(null)
     sandbox.stub(ContractHelper, 'getBytecode').resolves('0xUnrelatedBytecodeThatDoesNotMatchAnyFunctionHashes')

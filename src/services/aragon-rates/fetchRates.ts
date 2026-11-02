@@ -62,7 +62,10 @@ export const FetchRates = {
       where: {
         $and: [
           {
-            $or: [{ type: ITokenType.ERC20, isGovernance: true }, { type: ITokenType.escrowAdapter }],
+            $or: [
+              { type: { $in: [ITokenType.ERC20, ITokenType.bondedVotes] }, isGovernance: true },
+              { type: ITokenType.escrowAdapter },
+            ],
           },
           { network: { $in: TestNetworks } },
           {

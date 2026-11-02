@@ -137,12 +137,6 @@ const ProposalHelper = {
     }
   },
 
-  /**
-   * Reads a CRISP proposal on-chain. Same shape of access as token voting (`parameters.startDate`
-   * / `parameters.endDate`), which is what makes the start/end-date fallback work unchanged, but
-   * the struct also carries the E3 round id and the tally — empty while the ballots are still
-   * encrypted.
-   */
   async getProposalCrisp({
     proposalIndex,
     pluginAddress,

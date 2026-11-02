@@ -7,6 +7,7 @@ import GovernanceVeHelper from '@helpers/governanceVe'
 import LockToVoteHelper from '@helpers/lockToVoteHelper'
 import { PluginSlug } from '@helpers/pluginSlug'
 import RabbitMQHelper from '@helpers/rabbitMQ'
+import TokenDetector from '@helpers/tokenDetector'
 import utils from '@helpers/utils'
 import VotingEscrowDetector from '@helpers/votingEscrowDetector'
 import Web3Helper from '@helpers/web3'
@@ -29,6 +30,7 @@ import {
   IPluginInterfaceType,
   IPluginStatus,
   ISPPLogs,
+  ITokenType,
 } from '@types'
 import { Interface, type LogDescription, type TransactionReceipt } from 'ethers'
 
@@ -469,8 +471,6 @@ export const PluginSetupProcessorHandler = {
   findAndUpdateTokenAddress: async (pluginDb: Plugin, info: ILogInfo): Promise<Plugin> => {
     let tokenAddress: any = null
     switch (pluginDb.interfaceType) {
-      // CrispVoting exposes the canonical getVotingToken(), so the token is resolved the same
-      // way as for token voting even though the ballots are encrypted.
       case IPluginInterfaceType.crisp:
       case IPluginInterfaceType.tokenVoting:
         tokenAddress = await Web3Helper.getVotingToken(pluginDb.address, info.network)
@@ -520,6 +520,10 @@ export const PluginSetupProcessorHandler = {
     const escrowAddress = await GovernanceVeHelper.getEscrowAddress(tokenAddress, info.network)
 
     if (escrowAddress) {
+      // BondedVotes also exposes escrow(), but its voting power is not the escrow's: it has its own member indexing
+      const { type } = await TokenDetector.detectTokenType(tokenAddress, info.network)
+      if (type === ITokenType.bondedVotes) return null
+
       // check if the escrowAddress is following our spec
       const result = await VotingEscrowDetector.isVotingEscrow(escrowAddress, info.network)
       if (result.status) {

@@ -1,8 +1,17 @@
+import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
+import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
 import Web3Helper from '@helpers/web3'
 import logger from '@logger'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import { LogTokenVoting } from '@plugins/logTokenVoting'
-import { IGovernanceErc20Logs, ITokenType, NetworksEnum } from '@types'
+import {
+  IBondedVotesLogs,
+  IGovernanceErc20Logs,
+  IPluginInterfaceType,
+  ITokenType,
+  IVotingEscrowAdapterLogs,
+  NetworksEnum,
+} from '@types'
 import { expect } from 'chai'
 import proxyquire from 'proxyquire'
 import * as sinon from 'sinon'
@@ -854,6 +863,112 @@ describe('AragonPlugins: LogTokenVoting', () => {
       expect(crawlStub.callCount).to.equal(2)
       expect(processErrorStub.calledOnce).to.be.true
       expect(processErrorStub.calledWith(error, pluginStub, { logIndex: 5, transactionHash: '0xhash5' })).to.be.true
+    })
+
+    it('should not crawl the token without a voting escrow, which would key the crawl on `undefined`', async () => {
+      const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+      sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+      sandbox.stub(logger, 'verbose')
+      const escrowCrawlerStub = sandbox.spy(LogTokenVoting, 'buildEscrowCrawler')
+
+      const token = { address: '0x123', network: NetworksEnum.ethereumSepolia, type: ITokenType.escrowAdapter } as any
+      const plugin = { address: '0x456', tokenAddress: token.address, network: token.network } as any
+
+      await LogTokenVoting.veGovernance(plugin, token)
+
+      expect(crawlStub.calledOnce).to.be.true
+      expect(escrowCrawlerStub.called).to.be.false
+    })
+  })
+
+  describe('bondedVotesGovernance', () => {
+    const token = {
+      address: '0xBondedVotes',
+      network: NetworksEnum.ethereumSepolia,
+      type: ITokenType.bondedVotes,
+      blockNumber: 50,
+    } as any
+    const plugin = {
+      address: '0x456',
+      tokenAddress: token.address,
+      network: token.network,
+      blockNumber: 100,
+    } as any
+    const sources = { checkpoints: '0xCheckpoints', votesSource: '0xVotesSource' }
+
+    beforeEach(() => {
+      sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves(sources)
+    })
+
+    it('should crawl the BondedVotes events from the token, its checkpoints and its votes source', async () => {
+      const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
+      const { address, events, fromBlock, logService } = (crawler as any).crawlParams
+
+      expect(address).to.deep.equal([token.address, sources.checkpoints, sources.votesSource])
+      expect(fromBlock).to.equal(token.blockNumber)
+      expect(logService).to.equal(`bondedVotes-${token.network}-${token.address}`)
+      expect(events.map((item: any) => item.event)).to.have.members([
+        IBondedVotesLogs.BondedDelegateChanged,
+        IBondedVotesLogs.BondedCheckpointed,
+        IGovernanceErc20Logs.DelegateVotesChanged,
+        IVotingEscrowAdapterLogs.DelegateChanged,
+      ])
+    })
+
+    it('should refresh voting power on votes source delegation instead of the ERC20 / escrow handlers', async () => {
+      const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
+      const { events } = (crawler as any).crawlParams
+
+      for (const event of events) {
+        const expected =
+          event.event === IBondedVotesLogs.BondedDelegateChanged
+            ? GovernanceBondedVotesHandler.bondedDelegateChanged
+            : GovernanceBondedVotesHandler.votingPowerChanged
+        event.config.forEach((cfg: any) => expect(cfg.handler).to.equal(expected))
+      }
+    })
+
+    it('should dedupe the crawled addresses when the votes source is the token itself', async () => {
+      ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).resolves({
+        checkpoints: '0xCheckpoints',
+        votesSource: token.address,
+      })
+
+      const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
+
+      expect((crawler as any).crawlParams.address).to.deep.equal([token.address, '0xCheckpoints'])
+    })
+
+    it('should crawl the plugin and the token', async () => {
+      const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+      sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+      sandbox.stub(logger, 'verbose')
+
+      await LogTokenVoting.start(plugin, token)
+
+      expect(crawlStub.calledTwice).to.be.true
+    })
+  })
+
+  describe('buildPluginCrawler', () => {
+    const crawledEvents = (interfaceType: IPluginInterfaceType) => {
+      const plugin = { address: '0x456', network: NetworksEnum.ethereumSepolia, interfaceType } as any
+      const { events } = (LogTokenVoting.buildPluginCrawler(plugin) as any).crawlParams
+      return events.map((item: any) => item.event)
+    }
+
+    it('should crawl the E3 settings and no ballots for a crisp plugin', () => {
+      const events = crawledEvents(IPluginInterfaceType.crisp)
+
+      expect(events).to.include('E3SettingsUpdated')
+      expect(events).to.not.include('VoteCast')
+    })
+
+    it('should crawl the ballots and no E3 settings for a token voting plugin', () => {
+      const events = crawledEvents(IPluginInterfaceType.tokenVoting)
+
+      expect(events).to.include('VoteCast')
+      expect(events).to.not.include('E3SettingsUpdated')
     })
   })
 

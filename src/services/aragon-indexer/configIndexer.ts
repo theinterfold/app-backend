@@ -1,3 +1,4 @@
+import { BondedCheckpoints, BondedVotes } from '@artifacts/BondedVotes'
 import { CapitalDistributor } from '@artifacts/CapitalDistributor'
 import {
   AddressGaugeRatioModel,
@@ -44,6 +45,7 @@ import { CrossChainHandler } from '@handlers/crossChainHandler'
 import { DaoExecutionHandler } from '@handlers/daoExecutionHandler'
 import { ExecuteHandler } from '@handlers/executeHandler'
 import { GaugeHandler } from '@handlers/gaugeHandler'
+import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import { GovernanceVeHandler } from '@handlers/governanceVeHandler'
 import LockManagerHandler from '@handlers/lockManagerHandler'
 import { PolicyHandler } from '@handlers/policyHandler'
@@ -171,9 +173,6 @@ const IndexerEventConfig: IIndexerConfig[] = [
   {
     event: 'VotingSettingsUpdated',
     enableHistorical: false,
-    // Three different event signatures share this name, so each carries its own topic hash and
-    // its own decoding ABI. CrispVoting's is
-    // `(minProposerVotingPower, minVoterVotingPower, minParticipation, supportThreshold, minDuration)`.
     topic: [
       new Interface(TokenVoting.abi).getEvent('VotingSettingsUpdated')?.topicHash!,
       new Interface(LockToVote.abi).getEvent('VotingSettingsUpdated')?.topicHash!,
@@ -190,7 +189,7 @@ const IndexerEventConfig: IIndexerConfig[] = [
       },
       {
         abi: CrispVoting.abi,
-        handler: PluginSettingHandler.crispSettingsUpdated,
+        handler: PluginSettingHandler.votingSettingsUpdated,
       },
     ],
   },
@@ -367,6 +366,30 @@ const IndexerEventConfig: IIndexerConfig[] = [
       {
         abi: GovernanceERC20.abi,
         handler: GovernanceErc20Handler.delegateVotesChanged,
+      },
+    ],
+  },
+  {
+    event: 'BondedDelegateChanged',
+    enableHistorical: false,
+    topic: new Interface(BondedVotes.abi).getEvent('BondedDelegateChanged')?.topicHash!,
+    config: [
+      {
+        abi: BondedVotes.abi,
+        handler: GovernanceBondedVotesHandler.bondedDelegateChanged,
+        batchHandler: GovernanceBondedVotesHandler.bondedDelegateChangedBatch,
+      },
+    ],
+  },
+  {
+    event: 'BondedCheckpointed',
+    enableHistorical: false,
+    topic: new Interface(BondedCheckpoints.abi).getEvent('BondedCheckpointed')?.topicHash!,
+    config: [
+      {
+        abi: BondedCheckpoints.abi,
+        handler: GovernanceBondedVotesHandler.votingPowerChanged,
+        batchHandler: GovernanceBondedVotesHandler.votingPowerChangedBatch,
       },
     ],
   },

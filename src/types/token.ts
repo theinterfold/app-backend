@@ -64,6 +64,7 @@ export enum ITokenType {
   ERC1155 = 'ERC1155',
   ERC777 = 'ERC777',
   escrowAdapter = 'escrowAdapter',
+  bondedVotes = 'bondedVotes',
   native = 'native',
   unknown = 'unknown',
 }

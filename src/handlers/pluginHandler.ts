@@ -31,6 +31,7 @@ import {
   IPluginStatus,
   type IQueryGetPlugin,
   type NetworksEnum,
+  TokenVotingTypes,
 } from '@types'
 import { ethers, Interface } from 'ethers'
 
@@ -306,10 +307,7 @@ export const PluginHandler = {
     document.interfaceType = pluginInfo?.type
     document.isObjection = !!pluginInfo?.isObjection
 
-    if (
-      document.interfaceType === IPluginInterfaceType.tokenVoting ||
-      document.interfaceType === IPluginInterfaceType.crisp
-    ) {
+    if (TokenVotingTypes.includes(document.interfaceType)) {
       // maybe the token is not a erc20 governance
       document.tokenAddress = plugin.tokenAddress
     }
@@ -392,8 +390,7 @@ export const PluginHandler = {
         document.isObjection = !!pluginInfo?.isObjection
 
         if (
-          document.interfaceType === IPluginInterfaceType.tokenVoting ||
-          document.interfaceType === IPluginInterfaceType.crisp ||
+          TokenVotingTypes.includes(document.interfaceType) ||
           document.interfaceType === IPluginInterfaceType.gauge
         ) {
           document.tokenAddress = pluginLog.tokenAddress
@@ -617,8 +614,7 @@ export const PluginHandler = {
     }
 
     if (
-      (newPlugin.interfaceType === IPluginInterfaceType.tokenVoting ||
-        newPlugin.interfaceType === IPluginInterfaceType.crisp) &&
+      TokenVotingTypes.includes(newPlugin.interfaceType) &&
       newPlugin.interfaceType === previousPlugin.interfaceType &&
       !newPlugin.tokenAddress &&
       previousPlugin.tokenAddress

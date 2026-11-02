@@ -1,5 +1,5 @@
 import { Models } from '@dbModels'
-import { IPluginInterfaceType, IPluginStatus, type ITokenEligibilityCacheState, type NetworksEnum } from '@types'
+import { IPluginStatus, type ITokenEligibilityCacheState, type NetworksEnum, TokenVotingTypes } from '@types'
 
 /**
  * Re-read window when advancing the cursors, to absorb clock skew between
@@ -12,9 +12,7 @@ const CURSOR_OVERLAP_MS = 60 * 1000
 const pluginEligibility = {
   status: IPluginStatus.installed,
   isSupported: true,
-  // CRISP derives voting power from the same delegated token balances (or escrow delegations), so
-  // its tokens need the same delegation sync.
-  interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp] },
+  interfaceType: { $in: TokenVotingTypes },
 }
 
 const tokenEligibility = {

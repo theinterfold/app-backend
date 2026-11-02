@@ -286,13 +286,7 @@ export interface ICrawlSetting {
   lastSync: number
 }
 
-/**
- * Events crawled on a CrispVoting plugin.
- *
- * There is deliberately no VoteCast: CRISP ballots are encrypted and relayed to the E3 round,
- * so no per-voter event is ever emitted on the plugin. The votes collection stays empty for a
- * CRISP proposal, which is what the app renders as "ballots are private".
- */
+// No VoteCast: CRISP ballots are encrypted and sent to the E3 round, never to the plugin
 export enum ICrispVotingLogs {
   ProposalCreated = 'ProposalCreated',
   ProposalExecuted = 'ProposalExecuted',
@@ -396,6 +390,11 @@ export enum IVotingEscrowAdapterLogs {
   TokensUndelegated = 'TokensUndelegated',
   TokensDelegated = 'TokensDelegated',
   DelegateChanged = 'DelegateChanged',
+}
+
+export enum IBondedVotesLogs {
+  BondedDelegateChanged = 'BondedDelegateChanged',
+  BondedCheckpointed = 'BondedCheckpointed',
 }
 
 export enum IExitQueueLogs {
