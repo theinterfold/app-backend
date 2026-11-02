@@ -6,7 +6,14 @@ import logger from '@logger'
 import type Plugin from '@models/schema/plugin'
 import { TickContext } from '@modules/crawlers/tickContext'
 import { MemberGovernanceFactory } from '@src/governance'
-import { type HexAddress, type ILogInfo, IPluginInterfaceType, ITokenType, type NetworksEnum } from '@types'
+import {
+  type HexAddress,
+  type ILogInfo,
+  IPluginInterfaceType,
+  ITokenType,
+  type NetworksEnum,
+  TokenVotingTypes,
+} from '@types'
 import { ethers, Interface, type Log, type LogDescription } from 'ethers'
 
 const llo = logger.logMeta.bind(null, { service: 'handlers:GovernanceVeBatch' })
@@ -583,9 +590,7 @@ export class VeBatchProcessor {
         ? Models.Plugin.find({
             tokenAddress: { $in: [...tokenAddrs] },
             network: this.network,
-            interfaceType: {
-              $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
-            },
+            interfaceType: { $in: [...TokenVotingTypes, IPluginInterfaceType.gauge] },
           }).lean()
         : [],
     ])

@@ -19,6 +19,7 @@ import {
   IPluginInterfaceType,
   IPluginStatus,
   NetworksEnum,
+  TokenVotingTypes,
 } from '@types'
 import * as _ from 'lodash'
 import { Model, type SaveOptions } from 'mongoose'
@@ -921,12 +922,8 @@ export default class Dao extends Model {
       const memberQueries: Promise<string[]>[] = []
 
       for (const plugin of plugins) {
-        // CRISP members are token members too — the ballots are encrypted, the electorate is not.
-        if (
-          (plugin.interfaceType === IPluginInterfaceType.tokenVoting ||
-            plugin.interfaceType === IPluginInterfaceType.crisp) &&
-          plugin.tokenAddress
-        ) {
+        // CRISP members are token members too
+        if (TokenVotingTypes.includes(plugin.interfaceType) && plugin.tokenAddress) {
           // Query TokenMember collection - with votingPower filter (consistent with rest of codebase)
           memberQueries.push(
             Models.TokenMember.find(

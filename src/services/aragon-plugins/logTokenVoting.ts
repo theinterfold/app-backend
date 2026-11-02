@@ -1,14 +1,19 @@
+import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
 import ConfigIndexerHelper from '@helpers/configIndexer'
+import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
 import configIndexer from '@indexer/configIndexer'
 import logger from '@logger'
 import type Plugin from '@models/schema/plugin'
 import type Token from '@models/schema/token'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import {
+  IBondedVotesLogs,
+  ICrispVotingLogs,
   IExitQueueLogs,
   IGovernanceErc20Logs,
   type IIndexerConfig,
+  IPluginInterfaceType,
   ITokenType,
   ITokenVotingLogs,
   IVotingEscrowAdapterLogs,
@@ -22,15 +27,18 @@ export const LogTokenVoting = {
     switch (token.type) {
       case ITokenType.escrowAdapter:
         return LogTokenVoting.veGovernance(plugin, token, isHistorical)
+      case ITokenType.bondedVotes:
+        return LogTokenVoting.bondedVotesGovernance(plugin, token, isHistorical)
       default:
         return LogTokenVoting.erc20Governance(plugin, token, isHistorical)
     }
   },
 
   buildPluginCrawler: (plugin: Plugin, isHistorical?: boolean) => {
-    const configTVLogs = configIndexer.filter((item: IIndexerConfig) =>
-      Object.values(ITokenVotingLogs).includes(item.event as any),
+    const pluginLogs: string[] = Object.values(
+      plugin.interfaceType === IPluginInterfaceType.crisp ? ICrispVotingLogs : ITokenVotingLogs,
     )
+    const configTVLogs = configIndexer.filter((item: IIndexerConfig) => pluginLogs.includes(item.event))
 
     return new BlockchainLogCrawler({
       onlyHistorical: isHistorical,
@@ -99,15 +107,18 @@ export const LogTokenVoting = {
     logger.verbose('Start LogTokenVoting veGovernance', llo(infoLogs))
 
     const pluginCrawler = LogTokenVoting.buildPluginCrawler(plugin, isHistorical)
-    const escrowCrawler = LogTokenVoting.buildEscrowCrawler(plugin, token, isHistorical)
+    // without an escrow there is nothing to crawl on the token and the crawl key would be `undefined`
+    const escrowCrawler = plugin.votingEscrow?.escrowAddress
+      ? LogTokenVoting.buildEscrowCrawler(plugin, token, isHistorical)
+      : null
 
     logger.verbose('Start Token Sync', llo({ ...infoLogs, ...{ syncStrategy: 'BlockchainLogCrawler' } }))
 
-    const crawlers: any = [pluginCrawler, escrowCrawler]
+    const crawlers = [pluginCrawler, escrowCrawler].filter((crawler): crawler is BlockchainLogCrawler => !!crawler)
 
     const startTime = Date.now()
-    await Promise.all(crawlers.map(async (crawler: BlockchainLogCrawler) => crawler.crawl()))
-    await Promise.all(crawlers.map(async (crawler: BlockchainLogCrawler) => crawler.end()))
+    await Promise.all(crawlers.map(async crawler => crawler.crawl()))
+    await Promise.all(crawlers.map(async crawler => crawler.end()))
 
     logger.verbose(
       'End LogTokenVoting veGovernance',
@@ -119,6 +130,59 @@ export const LogTokenVoting = {
         lastPluginSyncBlock: pluginCrawler.crawlSetting.lastSync,
       }),
     )
+  },
+
+  buildBondedVotesCrawler: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {
+    const { checkpoints, votesSource } = await GovernanceBondedVotesHelper.getSources(token.address, plugin.network)
+    // delegation on the wrapped votes source (ERC20Votes token or escrow adapter) moves voting power too
+    const votesSourceLogs: string[] = [
+      IGovernanceErc20Logs.DelegateVotesChanged,
+      IVotingEscrowAdapterLogs.DelegateChanged,
+    ]
+    const events = configIndexer
+      .filter(
+        (item: IIndexerConfig) =>
+          Object.values(IBondedVotesLogs).includes(item.event as IBondedVotesLogs) ||
+          votesSourceLogs.includes(item.event),
+      )
+      .map((item: IIndexerConfig) =>
+        votesSourceLogs.includes(item.event)
+          ? {
+              ...item,
+              config: item.config.map(cfg => ({
+                ...cfg,
+                handler: GovernanceBondedVotesHandler.votingPowerChanged,
+                batchHandler: GovernanceBondedVotesHandler.votingPowerChangedBatch,
+              })),
+            }
+          : item,
+      )
+
+    return new BlockchainLogCrawler({
+      onlyHistorical: isHistorical,
+      network: plugin.network,
+      events,
+      address: [...new Set([token.address, checkpoints, votesSource])],
+      fromBlock: token?.blockNumber || plugin.blockNumber,
+      onError: async (error: any, log: any) => LogTokenVoting.processError(error, plugin, log),
+      logService: ConfigIndexerHelper.builders.token(ITokenType.bondedVotes, plugin.network, token.address),
+      stopOnError: true,
+    })
+  },
+
+  bondedVotesGovernance: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {
+    logger.verbose(
+      'Start LogTokenVoting bondedVotesGovernance',
+      llo({ pluginAddress: plugin.address, tokenAddress: token.address }),
+    )
+
+    const crawlers = [
+      LogTokenVoting.buildPluginCrawler(plugin, isHistorical),
+      await LogTokenVoting.buildBondedVotesCrawler(plugin, token, isHistorical),
+    ]
+
+    await Promise.all(crawlers.map(async crawler => crawler.crawl()))
+    await Promise.all(crawlers.map(async crawler => crawler.end()))
   },
 
   erc20Governance: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {

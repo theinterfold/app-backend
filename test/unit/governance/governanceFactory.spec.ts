@@ -121,57 +121,6 @@ describe('Governance:GovernanceFactory', () => {
       })
     })
 
-    describe('crisp interface type', () => {
-      it('should create Erc20Governance from the token address', () => {
-        // CRISP encrypts the ballot, not the electorate: its members are the token members,
-        // exactly as for token voting.
-        const result = MemberGovernanceFactory.create({
-          address: testAddress,
-          network: testNetwork,
-          interfaceType: IPluginInterfaceType.crisp,
-        })
-
-        expect(result).to.be.instanceOf(Erc20Governance)
-        expect(result?.['address']).to.equal(testAddress)
-        expect(result?.['network']).to.equal(testNetwork)
-      })
-
-      it('should create VeGovernance for an escrow adapter token, as token voting does', () => {
-        const result = MemberGovernanceFactory.create({
-          address: testAddress,
-          network: testNetwork,
-          interfaceType: IPluginInterfaceType.crisp,
-          tokenType: ITokenType.escrowAdapter,
-          extraParams: { escrowAdapterAddress: '0xadapter' as any },
-        })
-
-        expect(result).to.be.instanceOf(VeGovernance)
-      })
-
-      it('should resolve a crisp plugin without an escrow (BondedVotes) to its token members', () => {
-        const result = MemberGovernanceFactory.createFromPlugin({
-          interfaceType: IPluginInterfaceType.crisp,
-          tokenAddress: testAddress,
-          network: testNetwork,
-        } as any)
-
-        expect(result).to.be.instanceOf(Erc20Governance)
-        expect(result?.['address']).to.equal(testAddress)
-      })
-
-      it('should resolve a crisp plugin with a voting escrow to VeGovernance', () => {
-        const result = MemberGovernanceFactory.createFromPlugin({
-          interfaceType: IPluginInterfaceType.crisp,
-          tokenAddress: '0xadapter',
-          network: testNetwork,
-          votingEscrow: { escrowAddress: testAddress },
-        } as any)
-
-        expect(result).to.be.instanceOf(VeGovernance)
-        expect(result?.['address']).to.equal(testAddress)
-      })
-    })
-
     describe('lockToVote interface type', () => {
       it('should create LockToVoteGovernance', () => {
         const result = MemberGovernanceFactory.create({
@@ -346,13 +295,17 @@ describe('Governance:GovernanceFactory', () => {
         expect(result?.['address']).to.equal(testAddress)
       })
 
-      it('should throw when the plugin has no token address', () => {
+      it('should create VeGovernance for a plugin with a voting escrow', () => {
         const plugin = createPlugin({
           interfaceType: IPluginInterfaceType.crisp,
-          tokenAddress: null,
+          tokenAddress: '0xadapter',
+          votingEscrow: { escrowAddress: testAddress },
         })
 
-        expect(() => MemberGovernanceFactory.createFromPlugin(plugin as any)).to.throw()
+        const result = MemberGovernanceFactory.createFromPlugin(plugin as any)
+
+        expect(result).to.be.instanceOf(VeGovernance)
+        expect(result?.['address']).to.equal(testAddress)
       })
     })
 

@@ -31,6 +31,7 @@ import {
   ISettingStatus,
   type ISettingVotingEscrow,
   type NetworksEnum,
+  TokenVotingTypes,
 } from '@types'
 import { type LogDescription, type TransactionReceipt } from 'ethers'
 
@@ -63,7 +64,7 @@ export const PluginSettingHandler = {
       case IPluginInterfaceType.crisp:
         abi = CrispVoting.abi
         eventName = IEventLogPluginSettings.VotingSettingsUpdated
-        handler = PluginSettingHandler.crispSettingsUpdated
+        handler = PluginSettingHandler.votingSettingsUpdated
         break
       case IPluginInterfaceType.multisig:
         abi = Multisig.abi
@@ -274,7 +275,7 @@ export const PluginSettingHandler = {
       return
     }
 
-    if (relatedPlugin.interfaceType !== IPluginInterfaceType.tokenVoting || relatedPlugin.tokenAddress === null) {
+    if (!TokenVotingTypes.includes(relatedPlugin.interfaceType) || relatedPlugin.tokenAddress === null) {
       logger.warn('Plugin is not a token voting', llo(info))
       return
     }
@@ -301,8 +302,9 @@ export const PluginSettingHandler = {
       pluginSubdomain: relatedPlugin.subdomain,
       tokenAddress: relatedPlugin.tokenAddress,
       network,
-      isObjection: relatedPlugin.isObjection || undefined,
-      votingMode: Number(parsedEvent.args.votingMode),
+      ...(relatedPlugin.interfaceType === IPluginInterfaceType.crisp
+        ? await PluginSettingHandler.crispSettings(parsedEvent, activePluginSetting, info)
+        : { isObjection: relatedPlugin.isObjection || undefined, votingMode: Number(parsedEvent.args.votingMode) }),
       supportThreshold: Number(parsedEvent.args.supportThreshold),
       minParticipation: Number(parsedEvent.args.minParticipation),
       minDuration: Number(parsedEvent.args.minDuration),
@@ -359,127 +361,19 @@ export const PluginSettingHandler = {
     return relatedPlugin
   },
 
-  /**
-   * CrispVoting settings.
-   *
-   * The event is `VotingSettingsUpdated(minProposerVotingPower, minVoterVotingPower,
-   * minParticipation, supportThreshold, minDuration)` — a different signature from canonical
-   * TokenVoting, which is why it needs its own handler rather than reusing
-   * `votingSettingsUpdated`.
-   *
-   * `votingMode` deliberately has no CRISP counterpart: there is no early execution, the tally
-   * only exists once the round closes.
-   *
-   * `minParticipation` and `supportThreshold` are whole percentages out of 100 here, not ppm out
-   * of 1_000_000 as they are for TokenVoting. Do not normalise them — the app reads percentages.
-   * `supportThreshold` is strict: yes must exceed that share of yes+no.
-   *
-   * The E3 request parameters (`committeeSize`, `paramSet`) are not part of this event and are
-   * set by `initialize` without one, so they are read from the contract at the event's block.
-   */
-  crispSettingsUpdated: async (parsedEvent: LogDescription, info: ILogInfo): Promise<Plugin | undefined> => {
-    const { address: pluginAddress, transactionHash, blockNumber, network } = info
-    const relatedPlugin = await Models.Plugin.findByAddress(pluginAddress, network)
+  // CRISP's VotingSettingsUpdated has no voting mode and carries percentages out of 100 (not ppm). The E3 request
+  // parameters are written by `initialize` without an event, so they are read from the contract.
+  crispSettings: async (parsedEvent: LogDescription, activeSetting: Setting | null, info: ILogInfo) => {
+    const onChain = await Web3Helper.getCrispSettings(info.address, info.network, info.blockNumber)
 
-    if (!relatedPlugin) {
-      logger.warn('Plugin not found', llo(info))
-      return
-    }
-
-    if (relatedPlugin.interfaceType !== IPluginInterfaceType.crisp || relatedPlugin.tokenAddress === null) {
-      logger.warn('Plugin is not a crisp voting plugin', llo(info))
-      return
-    }
-
-    const existingLog = await Models.Setting.findExistingLog({
-      transactionHash,
-      pluginAddress,
-    })
-
-    if (existingLog) return
-
-    const activePluginSetting = await Models.Setting.findActive({
-      network: info.network,
-      pluginAddress,
-    })
-
-    const onChain = await Web3Helper.getCrispSettings(pluginAddress, network, blockNumber)
-
-    const settingLog = {
-      blockNumber,
-      blockTimestamp: (await Web3Helper.getBlockTimestamp(blockNumber, network)) || undefined,
-      transactionHash,
-      status: ISettingStatus.active,
-      daoAddress: relatedPlugin.daoAddress,
-      pluginAddress,
-      pluginSubdomain: relatedPlugin.subdomain,
-      tokenAddress: relatedPlugin.tokenAddress,
-      network,
-      minParticipation: Number(parsedEvent.args.minParticipation),
-      supportThreshold: Number(parsedEvent.args.supportThreshold),
-      minDuration: Number(parsedEvent.args.minDuration),
-      minProposerVotingPower: parsedEvent.args.minProposerVotingPower.toString(),
+    return {
       minVoterVotingPower: parsedEvent.args.minVoterVotingPower.toString(),
-      committeeSize: onChain ? onChain.committeeSize : activePluginSetting?.committeeSize,
-      paramSet: onChain ? onChain.paramSet : activePluginSetting?.paramSet,
+      committeeSize: onChain ? onChain.committeeSize : activeSetting?.committeeSize,
+      paramSet: onChain ? onChain.paramSet : activeSetting?.paramSet,
     }
-
-    await DbOperations.createDocument(Models.Setting, settingLog, info, 'New Setting - crispSettingsUpdated', llo)
-
-    if (activePluginSetting) {
-      await DbOperations.updateDocument(
-        activePluginSetting,
-        {
-          inactiveAtBlockNumber: blockNumber,
-          status: ISettingStatus.inactive,
-        },
-        { logId: activePluginSetting.id, info },
-        'Update crisp inactive plugin',
-        llo,
-      )
-    }
-
-    const tokenDb = await ProxyToken.saveAndGetToken(relatedPlugin.tokenAddress, relatedPlugin.network)
-
-    if (!tokenDb) {
-      logger.error('crispSettingsUpdated token not found', llo({ info }))
-    }
-
-    if (tokenDb?.isGovernance) {
-      await PluginSettingHandler.isSupported(relatedPlugin, info)
-
-      const sppPlugin = await Models.Plugin.findOne({
-        daoAddress: relatedPlugin.daoAddress,
-        network: relatedPlugin.network,
-        interfaceType: IPluginInterfaceType.spp,
-        status: IPluginStatus.installed,
-        'subPlugins.addresses': { $in: [pluginAddress] },
-      })
-
-      if (sppPlugin) {
-        const sppSettings = await Models.Setting.findActive({
-          network: info.network,
-          pluginAddress: sppPlugin.address,
-        })
-
-        if (sppSettings) {
-          await PluginSettingHandler.pairSppPlugins(sppPlugin, sppSettings, info)
-        }
-      }
-    }
-
-    return relatedPlugin
   },
 
-  /**
-   * CrispVoting `E3SettingsUpdated(committeeSize, paramSet, computeProviderParams)`.
-   *
-   * Only the committee size and parameter set are stored; the compute provider params are an
-   * opaque ABI blob with no consumer. The event is not a versioned settings change of its own —
-   * it is routinely emitted in the same transaction as `VotingSettingsUpdated` by one DAO
-   * proposal, so the active setting is updated in place (idempotent, replay-safe) instead of
-   * creating a second `Setting` for that transaction.
-   */
+  // Often emitted with VotingSettingsUpdated by one proposal, so the active setting is patched in place
   crispE3SettingsUpdated: async (parsedEvent: LogDescription, info: ILogInfo): Promise<Plugin | undefined> => {
     const { address: pluginAddress, blockNumber, network } = info
     const relatedPlugin = await Models.Plugin.findByAddress(pluginAddress, network)

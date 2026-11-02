@@ -20,15 +20,8 @@ import {
 const MIGRATION = '20261101120000-migrateCrispPlugins'
 const llo = logger.logMeta.bind(null, { service: `Migration: ${MIGRATION}` })
 
-/**
- * CrispVoting also exposes `getVotingToken()` and `totalVotingPower(uint256)`, so before the
- * detector probed `CRISP_FUNCTIONS` first every installed CRISP plugin was stored as token voting.
- * Those plugins were crawled under token voting: no settings (the event signature differs), no
- * support flag, and a proposal list whose tally the token-voting metrics job overwrote with zeros.
- *
- * Selection is by bytecode, not by address: a stored `tokenVoting` plugin is a misdetected CRISP
- * plugin exactly when today's detector classifies it as `crisp`.
- */
+// CRISP also satisfies the token-voting detection, so plugins installed before CRISP_FUNCTIONS were probed are stored
+// as token voting. Selection is by bytecode: such a plugin is one the current detector classifies as crisp.
 export const findMisdetectedCrispPlugins = async (): Promise<Plugin[]> => {
   const candidates: Plugin[] = await Models.Plugin.find({
     interfaceType: IPluginInterfaceType.tokenVoting,
@@ -53,15 +46,13 @@ export const migrateCrispPlugin = async (plugin: Plugin): Promise<void> => {
     transactionHash: plugin.transactionHash,
   } as ILogInfo
 
-  // Everything that can fail runs before the type is flipped: once flipped, the plugin is no
-  // longer selected, so a failure after that point could never be retried by re-running.
+  // Everything that can fail runs before the type is flipped, since a flipped plugin is no longer selected on re-run
   const onChain = await Web3Helper.getCrispSettings(address, network)
   if (!onChain) throw new Error(`Cannot read CRISP settings of ${address} on ${network}`)
 
   const tokenAddress = plugin.tokenAddress || (await Web3Helper.getVotingToken(address, network))
 
-  // Settings stored under the old type, if any, have the token-voting shape. Replace them with
-  // the contract's current values; the crawl below replays any later VotingSettingsUpdated on top.
+  // Replace token-voting-shaped settings with the contract's current values; the crawl replays later updates
   await Models.Setting.deleteMany({ pluginAddress: address, network })
   await Models.Setting.create({
     blockNumber: plugin.blockNumber,
@@ -88,8 +79,7 @@ export const migrateCrispPlugin = async (plugin: Plugin): Promise<void> => {
     if (token.isGovernance) await PluginSettingHandler.isSupported(plugin, info)
   }
 
-  // Proposals indexed under token voting carry zeroed metrics, and re-crawling skips documents
-  // that already exist, so drop them and let the crisp crawl rebuild them from the events.
+  // Proposals indexed as token voting carry zeroed metrics and re-crawling skips existing documents, so rebuild them
   await Models.Proposal.deleteMany({ pluginAddress: address, network })
   await Models.Vote.deleteMany({ pluginAddress: address, network })
   await Models.PluginMetrics.deleteMany({ pluginAddress: address, network })
@@ -110,7 +100,6 @@ export const migrateCrispPlugin = async (plugin: Plugin): Promise<void> => {
   )
   const updated: Plugin = await Models.Plugin.findOne({ id: plugin.id })
 
-  // The slug defaults to the interface type (a processKey from the plugin metadata wins).
   await PluginSlug.updateSlug(updated, updated.processKey)
 
   if (plugin.status === IPluginStatus.installed) {

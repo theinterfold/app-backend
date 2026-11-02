@@ -562,11 +562,7 @@ const Web3Helper = {
     }
   },
 
-  /**
-   * Reads CrispVoting's settings views at `blockNumber` (latest when omitted): the voting
-   * settings, and the E3 request parameters (committee size, BFV parameter set) that
-   * `initialize` writes without emitting an event.
-   */
+  // Reads the latest block when `blockNumber` is omitted. The E3 parameters are set by `initialize` without an event
   async getCrispSettings(address: HexAddress, network: NetworksEnum, blockNumber?: number) {
     try {
       const provider = ProviderModule.getAnyRpcProvider(network)

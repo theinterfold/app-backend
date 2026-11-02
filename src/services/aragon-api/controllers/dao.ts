@@ -15,6 +15,7 @@ import {
   type MembershipData,
   type NetworkGroupedAddresses,
   type NetworksEnum,
+  TokenVotingTypes,
 } from '@types'
 
 const DaoController = {
@@ -133,9 +134,7 @@ const DaoController = {
       if (tokenMembersByNetwork[network].length > 0) {
         orQueries.push({
           tokenAddress: { $in: tokenMembersByNetwork[network] },
-          // CRISP members are stored as token members, so a DAO governed by a CRISP body has to
-          // be reachable from the same lookup or its members never see it in their DAO list.
-          interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp] },
+          interfaceType: { $in: TokenVotingTypes },
           network,
         })
       }
@@ -145,7 +144,7 @@ const DaoController = {
       if (veMembersByNetwork[network].length > 0) {
         orQueries.push({
           tokenAddress: { $in: veMembersByNetwork[network] },
-          interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp] },
+          interfaceType: { $in: TokenVotingTypes },
           network,
         })
       }

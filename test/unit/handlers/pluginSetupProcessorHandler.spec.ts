@@ -8,6 +8,7 @@ import GaugeHelper from '@helpers/gauge'
 import GovernanceVeHelper from '@helpers/governanceVe'
 import LockToVoteHelper from '@helpers/lockToVoteHelper'
 import RabbitMQHelper from '@helpers/rabbitMQ'
+import TokenDetector from '@helpers/tokenDetector'
 import VotingEscrowDetector from '@helpers/votingEscrowDetector'
 import Web3Helper from '@helpers/web3'
 import Web3Utils from '@helpers/web3Utils'
@@ -26,6 +27,7 @@ import {
   IPluginActionType,
   IPluginInterfaceType,
   IPluginStatus,
+  ITokenType,
   NetworksEnum,
 } from '@types'
 import { expect } from 'chai'
@@ -2252,6 +2254,14 @@ describe('Indexer: PluginSetupProcessorHandler', () => {
   })
 
   describe('findVotingEscrow', () => {
+    let detectTokenTypeStub: sinon.SinonStub
+
+    beforeEach(() => {
+      detectTokenTypeStub = sandbox
+        .stub(TokenDetector, 'detectTokenType')
+        .resolves({ type: ITokenType.escrowAdapter } as any)
+    })
+
     it('should return voting escrow object when all addresses are valid and escrow is valid', async () => {
       const tokenAddress = '0x1111111111111111111111111111111111111111' // This is the IVoterAdapter
       const info = {
@@ -2315,6 +2325,20 @@ describe('Indexer: PluginSetupProcessorHandler', () => {
       const result = await PluginSetupProcessorHandler.findVotingEscrow(tokenAddress, info)
 
       expect(getEscrowAddressStub.calledOnceWith(tokenAddress, info.network)).to.be.true
+      expect(votingEscrowDetectorStub.notCalled).to.be.true
+      expect(result).to.be.null
+    })
+
+    it('should return null for a BondedVotes token, whose voting power is not the escrow one', async () => {
+      const tokenAddress = '0x1111111111111111111111111111111111111111'
+      const info = { network: NetworksEnum.ethereumSepolia, blockNumber: 1, transactionHash: '0x123' } as ILogInfo
+
+      sandbox.stub(GovernanceVeHelper, 'getEscrowAddress').resolves('0x3333333333333333333333333333333333333333')
+      detectTokenTypeStub.resolves({ type: ITokenType.bondedVotes } as any)
+      const votingEscrowDetectorStub = sandbox.stub(VotingEscrowDetector, 'isVotingEscrow')
+
+      const result = await PluginSetupProcessorHandler.findVotingEscrow(tokenAddress, info)
+
       expect(votingEscrowDetectorStub.notCalled).to.be.true
       expect(result).to.be.null
     })

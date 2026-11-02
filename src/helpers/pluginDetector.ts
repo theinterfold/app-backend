@@ -10,10 +10,7 @@ const llo = logger.logMeta.bind(null, { service: 'helper:PluginDetector' })
 const PluginDetector = {
   SPP_FUNCTIONS: ['getStages(uint256)'],
   TOKEN_VOTING_FUNCTIONS: ['getVotingToken()', 'totalVotingPower(uint256)'],
-  // CrispVoting also exposes getVotingToken() and totalVotingPower(uint256), so it must be
-  // probed before TOKEN_VOTING_FUNCTIONS or it is misdetected as token voting — which would
-  // render the public voting UI over a proposal whose ballots are encrypted. These four are
-  // the escrow and encrypted-tally surface that canonical TokenVoting does not have.
+  // Checked before TOKEN_VOTING_FUNCTIONS, which CRISP also satisfies
   CRISP_FUNCTIONS: [
     'getTally(uint256)',
     'getWinningOption(uint256)',

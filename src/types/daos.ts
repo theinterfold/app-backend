@@ -98,17 +98,14 @@ export interface IProposalCrispOnChain {
     numOptions: number
     startDate: number
     endDate: number
-    // A token-clock timepoint, so a timestamp for an ERC-6372 timestamp-mode token.
     snapshotBlock: number
     minVotingPower: number
-    // A whole percentage out of 100, not ppm.
+    // Percentages out of 100, not ppm
     minParticipation: number
-    // The support threshold in force at creation (a whole percentage out of 100): yes must
-    // strictly exceed this share of yes+no. A proposal settles under creation-time rules.
     supportThreshold: number
     creditMode: number
   }
-  // Empty until the ciphernode committee publishes the decrypted result.
+  // Empty until the ciphernode committee publishes the result
   tally: { counts: bigint[] }
   actions: IProposalActionOnChain[]
   allowFailureMap: string
