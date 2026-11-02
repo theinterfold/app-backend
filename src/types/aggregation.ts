@@ -126,6 +126,9 @@ export interface IAggSettingProjectFields {
   minParticipation?: 1
   minDuration?: 1
   minProposerVotingPower?: 1
+  minVoterVotingPower?: 1
+  committeeSize?: 1
+  paramSet?: 1
   stages?: 1
   externalProposers?: 1
   votingEscrow?: 1

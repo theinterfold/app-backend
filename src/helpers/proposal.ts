@@ -1,3 +1,4 @@
+import { CrispVoting } from '@artifacts/CrispVoting'
 import { Multisig } from '@artifacts/Multisig'
 import { StagedProposalProcessor } from '@artifacts/stagedProposalProcessor'
 import { TokenVoting } from '@artifacts/TokenVoting'
@@ -11,6 +12,7 @@ import {
   type ILogInfo,
   IMultiSigLogs,
   IPluginInterfaceType,
+  type IProposalCrispOnChain,
   type IProposalMultisigOnChain,
   type IProposalOnChain,
   type IProposalSPPOnChain,
@@ -36,6 +38,8 @@ const ProposalHelper = {
   }): Promise<IProposalOnChain> {
     if (plugin.interfaceType === IPluginInterfaceType.tokenVoting) {
       return await ProposalHelper.getProposalTokenVoting({ proposalIndex, pluginAddress: plugin.address, network })
+    } else if (plugin.interfaceType === IPluginInterfaceType.crisp) {
+      return await ProposalHelper.getProposalCrisp({ proposalIndex, pluginAddress: plugin.address, network })
     } else if (plugin.interfaceType === IPluginInterfaceType.multisig) {
       return await ProposalHelper.getProposalMultisig({ proposalIndex, pluginAddress: plugin.address, network })
     } else if (plugin.interfaceType === IPluginInterfaceType.spp) {
@@ -129,6 +133,33 @@ const ProposalHelper = {
       )
     } catch (error) {
       logger.error('Error getting proposal tokenVoting', llo({ proposalIndex, pluginAddress, network, error }))
+      return null
+    }
+  },
+
+  /**
+   * Reads a CRISP proposal on-chain. Same shape of access as token voting (`parameters.startDate`
+   * / `parameters.endDate`), which is what makes the start/end-date fallback work unchanged, but
+   * the struct also carries the E3 round id and the tally — empty while the ballots are still
+   * encrypted.
+   */
+  async getProposalCrisp({
+    proposalIndex,
+    pluginAddress,
+    network,
+  }: {
+    proposalIndex: string
+    pluginAddress: HexAddress
+    network: NetworksEnum
+  }): Promise<IProposalCrispOnChain | null> {
+    try {
+      const provider = ProviderModule.getAnyRpcProvider(network)
+      const contract = new Contract(pluginAddress, CrispVoting.abi, provider)
+      return await retryRequest(async () =>
+        BottleneckModule.getNodeLimiter(network).schedule(async () => contract.getProposal(proposalIndex)),
+      )
+    } catch (error) {
+      logger.error('Error getting proposal crisp', llo({ proposalIndex, pluginAddress, network, error }))
       return null
     }
   },

@@ -1,4 +1,5 @@
 import { CapitalDistributor } from '@artifacts/CapitalDistributor'
+import { CrispVoting } from '@artifacts/CrispVoting'
 import { CrossChainExecuteSelectorCondition } from '@artifacts/CrossChainExecuteSelectorCondition'
 import { DAORegistry } from '@artifacts/daoRegistry'
 import { ExecuteSelectorCondition } from '@artifacts/ExecuteSelectorCondition'
@@ -10,7 +11,7 @@ import { PluginSetupProcessor } from '@artifacts/pluginSetupProcessor'
 import { TokenVoting } from '@artifacts/TokenVoting'
 import ConfigIndexer from '@services/aragon-indexer/configIndexer'
 import { expect } from 'chai'
-import { Interface } from 'ethers'
+import { Interface, id } from 'ethers'
 
 describe('ConfigIndexer', () => {
   it('should be an array of configurations', () => {
@@ -150,17 +151,33 @@ describe('ConfigIndexer', () => {
         expect(config!.config[0].abi).to.equal(Multisig.abi)
       })
 
-      // Test VotingSettingsUpdated has both TokenVoting and LockToVote ABIs
+      // Test VotingSettingsUpdated has the TokenVoting, LockToVote and CrispVoting ABIs. The
+      // three share an event name but not a signature, so each needs its own decoding ABI.
       const votingSettingsConfig = ConfigIndexer.find(c => c.event === 'VotingSettingsUpdated')
       expect(votingSettingsConfig).to.exist
-      expect(votingSettingsConfig!.config.length).to.equal(2)
+      expect(votingSettingsConfig!.config.length).to.equal(3)
       expect(votingSettingsConfig!.config[0].abi).to.equal(TokenVoting.abi)
       expect(votingSettingsConfig!.config[1].abi).to.equal(LockToVote.abi)
+      expect(votingSettingsConfig!.config[2].abi).to.equal(CrispVoting.abi)
 
       // Test VoteCast uses TokenVoting ABI
       const voteCastConfig = ConfigIndexer.find(c => c.event === 'VoteCast')
       expect(voteCastConfig).to.exist
       expect(voteCastConfig!.config[0].abi).to.equal(TokenVoting.abi)
+    })
+
+    it('should subscribe to the deployed CrispVoting event signatures', () => {
+      // The topic is keccak256 of the canonical signature, so a stale ABI (the pre-supportThreshold
+      // 4-arg event) would silently subscribe to a topic no deployed plugin emits.
+      const votingSettingsTopic = id('VotingSettingsUpdated(uint256,uint256,uint32,uint32,uint64)')
+      const votingSettingsConfig = ConfigIndexer.find(c => c.event === 'VotingSettingsUpdated')
+      expect(votingSettingsConfig!.topic).to.include(votingSettingsTopic)
+      expect(votingSettingsConfig!.topic).to.not.include(id('VotingSettingsUpdated(uint256,uint256,uint32,uint64)'))
+
+      const e3SettingsConfig = ConfigIndexer.find(c => c.event === 'E3SettingsUpdated')
+      expect(e3SettingsConfig).to.exist
+      expect(e3SettingsConfig!.topic).to.equal(id('E3SettingsUpdated(uint8,uint8,bytes)'))
+      expect(e3SettingsConfig!.config[0].abi).to.equal(CrispVoting.abi)
     })
   })
 

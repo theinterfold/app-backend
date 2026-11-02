@@ -1401,6 +1401,56 @@ describe('Helpers: DecodeActions', () => {
       })
     })
 
+    it('should _parseVotingSettingUpdateAction for Crisp plugin', async () => {
+      const decodeActions = new DecodeActions()
+      // (minProposerVotingPower, minVoterVotingPower, minParticipation, supportThreshold, minDuration)
+      const baseAction = {
+        textSignature: 'updateVotingSettings(tuple)',
+        function: 'updateVotingSettings',
+        contract: 'CrispVoting',
+        parameters: [{ name: '_votingSettings', type: 'tuple', value: [1n, 2n, 3, 50, 86_400] }],
+      }
+      const action = {
+        to: '0x3949F15155D4b85d0159aB79cbf38DC51c41DD9F',
+        value: 0n,
+        data: '0x',
+        network: NetworksEnum.ethereumSepolia,
+      }
+
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        network: NetworksEnum.ethereumSepolia,
+        tokenAddress: '0xAddress',
+        address: action.to,
+        interfaceType: IPluginInterfaceType.crisp,
+      })
+      sandbox.stub(Models.Setting, 'findLastSettingByBlockNumber').resolves({
+        minProposerVotingPower: '10',
+        minVoterVotingPower: '5',
+        minParticipation: 15,
+        supportThreshold: 40,
+        minDuration: 3_600,
+      } as any)
+      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({ pickFields: sandbox.stub().returns({}) } as any)
+
+      const result = await decodeActions._parseVotingSettingUpdateAction(baseAction as any, action, {
+        network: NetworksEnum.ethereumSepolia,
+        blockNumber: 123,
+      })
+
+      expect(result?.type).to.be.eq(ProposalActionType.UpdateCrispVoteSettings)
+      expect(result?.existingSettings).to.deep.include({
+        minVoterVotingPower: '5',
+        supportThreshold: 40,
+      })
+      expect(result?.proposedSettings).to.deep.eq({
+        minProposerVotingPower: '1',
+        minVoterVotingPower: '2',
+        minParticipation: 3,
+        supportThreshold: 50,
+        minDuration: 86_400,
+      })
+    })
+
     it('should fails when the signature is not matched for _parseVotingSettingUpdateAction', async () => {
       const decodeActions = new DecodeActions()
       const baseAction = {

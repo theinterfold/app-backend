@@ -583,7 +583,9 @@ export class VeBatchProcessor {
         ? Models.Plugin.find({
             tokenAddress: { $in: [...tokenAddrs] },
             network: this.network,
-            interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.gauge] },
+            interfaceType: {
+              $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp, IPluginInterfaceType.gauge],
+            },
           }).lean()
         : [],
     ])

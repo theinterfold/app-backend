@@ -12,7 +12,9 @@ const CURSOR_OVERLAP_MS = 60 * 1000
 const pluginEligibility = {
   status: IPluginStatus.installed,
   isSupported: true,
-  interfaceType: IPluginInterfaceType.tokenVoting,
+  // CRISP derives voting power from the same delegated token balances (or escrow delegations), so
+  // its tokens need the same delegation sync.
+  interfaceType: { $in: [IPluginInterfaceType.tokenVoting, IPluginInterfaceType.crisp] },
 }
 
 const tokenEligibility = {
