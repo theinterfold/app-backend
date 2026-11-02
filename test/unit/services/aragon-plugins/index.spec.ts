@@ -3,6 +3,7 @@ import RabbitMQHelper from '@helpers/rabbitMQ'
 import logger from '@logger'
 import { LogAdmin } from '@plugins/logAdmin'
 import { LogCapitalDistributor } from '@plugins/logCapitalDistributor'
+import { LogCrisp } from '@plugins/logCrisp'
 import { LogDao } from '@plugins/logDao'
 import { LogGauge } from '@plugins/logGauge'
 import { LogMultiSig } from '@plugins/logMultisig'
@@ -401,6 +402,75 @@ describe('AragonPlugins: index', () => {
       expect(proxyTokenStub.args[0][0].network).to.be.eq(NetworksEnum.ethereumMainnet)
 
       expect(logTokenVotingStub.calledOnce).to.be.true
+    })
+
+    describe('crisp token gate', () => {
+      const runCrispQueue = async (token: object | null) => {
+        const processStub = sandbox.stub(RabbitMQHelper, 'process')
+        sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+          interfaceType: IPluginInterfaceType.crisp,
+          tokenAddress: '0xTokenAddress',
+          network: NetworksEnum.ethereumMainnet,
+        })
+        sandbox.stub(Models.Token, 'findOne').resolves(token as any)
+        const logCrispStub = sandbox.stub(LogCrisp, 'start').resolves()
+        const warnStub = sandbox.stub(logger, 'warn')
+
+        await AragonPluginsService.start()
+        await processStub.getCall(2).args[1]({
+          id: 'some-id',
+          params: { address: '0xPluginAddress', network: NetworksEnum.ethereumMainnet, isHistorical: false },
+        })
+
+        return { logCrispStub, warnStub }
+      }
+
+      // CRISP accepts what token voting accepts. BondedVotes — the token the deployed CRISP
+      // plugins vote with — is typed escrowAdapter, so an ERC20-only gate skips every real install.
+      ;[ITokenType.ERC20, ITokenType.ERC721, ITokenType.escrowAdapter].forEach(type => {
+        it(`should sync a crisp plugin whose token is ${type}`, async () => {
+          const { logCrispStub } = await runCrispQueue({ type, isGovernance: true, hasDelegate: true })
+
+          expect(logCrispStub.calledOnce).to.be.true
+        })
+      })
+
+      it('should not sync a crisp plugin whose token type is not supported', async () => {
+        const { logCrispStub, warnStub } = await runCrispQueue({
+          type: ITokenType.ERC1155,
+          isGovernance: true,
+          hasDelegate: true,
+        })
+
+        expect(logCrispStub.called).to.be.false
+        expect(warnStub.calledWith('Sync crisp plugin token not supported' as any)).to.be.true
+      })
+
+      it('should not sync a crisp plugin whose token is not a governance token', async () => {
+        const { logCrispStub } = await runCrispQueue({
+          type: ITokenType.escrowAdapter,
+          isGovernance: false,
+          hasDelegate: true,
+        })
+
+        expect(logCrispStub.called).to.be.false
+      })
+
+      it('should not sync a crisp plugin whose token has no delegation', async () => {
+        const { logCrispStub } = await runCrispQueue({
+          type: ITokenType.ERC20,
+          isGovernance: true,
+          hasDelegate: false,
+        })
+
+        expect(logCrispStub.called).to.be.false
+      })
+
+      it('should not sync a crisp plugin whose token is unknown', async () => {
+        const { logCrispStub } = await runCrispQueue(null)
+
+        expect(logCrispStub.called).to.be.false
+      })
     })
 
     it('should process plugins queue for spp interface type', async () => {

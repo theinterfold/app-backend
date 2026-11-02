@@ -487,7 +487,8 @@ class DecodeActions {
 
     if (
       pluginDetails.interfaceType !== IPluginInterfaceType.lockToVote &&
-      pluginDetails.interfaceType !== IPluginInterfaceType.tokenVoting
+      pluginDetails.interfaceType !== IPluginInterfaceType.tokenVoting &&
+      pluginDetails.interfaceType !== IPluginInterfaceType.crisp
     ) {
       logger.warn(
         `Unsupported plugin type for voting settings update: ${pluginDetails.interfaceType}`,
@@ -496,9 +497,58 @@ class DecodeActions {
       return null
     }
 
-    return pluginDetails.interfaceType === IPluginInterfaceType.tokenVoting
-      ? this._parseTokenVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
-      : this._parseLockToVoteVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
+    switch (pluginDetails.interfaceType) {
+      case IPluginInterfaceType.tokenVoting:
+        return this._parseTokenVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
+      case IPluginInterfaceType.crisp:
+        return this._parseCrispVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
+      default:
+        return this._parseLockToVoteVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
+    }
+  }
+
+  /**
+   * CrispVoting `updateVotingSettings((minProposerVotingPower, minVoterVotingPower,
+   * minParticipation, supportThreshold, minDuration))`. Percentages are out of 100, not ppm, and
+   * there is no voting mode.
+   */
+  async _parseCrispVotingSettingUpdateAction(
+    decodedData: IProposalActionInputData,
+    action: IRawAction,
+    document: Partial<Proposal>,
+    pluginDetails: Plugin,
+    votingToken: Token | null,
+  ) {
+    const activeSettings = await Models.Setting.findLastSettingByBlockNumber(
+      pluginDetails.address,
+      document.blockNumber!,
+    )
+
+    const existingSettings = activeSettings
+      ? {
+          minProposerVotingPower: activeSettings?.minProposerVotingPower,
+          minVoterVotingPower: activeSettings?.minVoterVotingPower,
+          minParticipation: activeSettings?.minParticipation,
+          supportThreshold: activeSettings?.supportThreshold,
+          minDuration: activeSettings?.minDuration,
+          token: votingToken?.pickFields(),
+        }
+      : {}
+
+    return {
+      type: ProposalActionType.UpdateCrispVoteSettings,
+      network: pluginDetails.network,
+      ...action,
+      inputData: decodedData,
+      existingSettings,
+      proposedSettings: {
+        minProposerVotingPower: decodedData.parameters[0].value[0].toString(),
+        minVoterVotingPower: decodedData.parameters[0].value[1].toString(),
+        minParticipation: Number(decodedData.parameters[0].value[2]),
+        supportThreshold: Number(decodedData.parameters[0].value[3]),
+        minDuration: Number(decodedData.parameters[0].value[4]),
+      },
+    }
   }
 
   async _parseTokenVotingSettingUpdateAction(

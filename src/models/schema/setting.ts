@@ -335,6 +335,18 @@ export default class Setting extends Model {
   @prop({ type: () => String })
   public minProposerVotingPower!: string
 
+  // CRISP only: the voting power a member needs at the snapshot to submit an encrypted ballot.
+  @prop({ type: () => String })
+  public minVoterVotingPower!: string
+
+  // CRISP only: the E3 request parameters future proposals are created with
+  // (IInterfold.CommitteeSize enum value and the BFV parameter-set identifier).
+  @prop({ type: () => Number })
+  public committeeSize!: number
+
+  @prop({ type: () => Number })
+  public paramSet!: number
+
   @prop({ type: () => Boolean })
   public enabledUpdatedVotingPowerHook!: boolean
 
@@ -516,6 +528,9 @@ export default class Setting extends Model {
           minParticipation: 1,
           minDuration: 1,
           minProposerVotingPower: 1,
+          minVoterVotingPower: 1,
+          committeeSize: 1,
+          paramSet: 1,
           token: 1,
           stages: 1,
           externalProposers: 1,
@@ -591,6 +606,9 @@ export default class Setting extends Model {
           minParticipation: 1,
           minDuration: 1,
           minProposerVotingPower: 1,
+          minVoterVotingPower: 1,
+          committeeSize: 1,
+          paramSet: 1,
           token: 1,
           votingEscrow: 1,
           policy: 1,

@@ -921,7 +921,12 @@ export default class Dao extends Model {
       const memberQueries: Promise<string[]>[] = []
 
       for (const plugin of plugins) {
-        if (plugin.interfaceType === IPluginInterfaceType.tokenVoting && plugin.tokenAddress) {
+        // CRISP members are token members too — the ballots are encrypted, the electorate is not.
+        if (
+          (plugin.interfaceType === IPluginInterfaceType.tokenVoting ||
+            plugin.interfaceType === IPluginInterfaceType.crisp) &&
+          plugin.tokenAddress
+        ) {
           // Query TokenMember collection - with votingPower filter (consistent with rest of codebase)
           memberQueries.push(
             Models.TokenMember.find(

@@ -708,6 +708,121 @@ describe('ProposalHandler', () => {
       expect(savedProposal.snapshot.totalSupply).to.eq('0')
     })
 
+    describe('crisp', () => {
+      const metadataUri = 'ipfs://metadata-uri'
+      const info: ILogInfo = {
+        transactionHash: '0xcrisp-tx',
+        address: '0xcrisp-plugin',
+        blockNumber: 100,
+        network,
+        eventName: 'proposalCreated',
+        transactionIndex: 1,
+        logIndex: 1,
+        interfaceType: IPluginInterfaceType.crisp,
+      }
+      const fakeEvent = {
+        args: {
+          creator: '0x742d35cC6634c0532925A3b844bc9E7595F0beB1',
+          proposalId: 1n,
+          startDate: 0n,
+          endDate: 1700000000n,
+          allowFailureMap: 0n,
+          metadata: metadataUri,
+          actions: [],
+        },
+      }
+      const plugin = {
+        address: '0xcrisp-plugin',
+        daoAddress: '0xdao-address',
+        subdomain: 'dao.subdomain',
+        interfaceType: IPluginInterfaceType.crisp,
+        tokenAddress: '0xtoken-address',
+      }
+
+      const stubCommon = () => {
+        sandbox.stub(Models.Plugin, 'findByAddress').resolves(plugin as any)
+        sandbox.stub(Models.Plugin, 'findOne').resolves(plugin as any)
+        sandbox.stub(Models.Proposal, 'findExistingLog').resolves(null)
+        sandbox.stub(Web3Utils, 'extractMetadataUri').returns(metadataUri)
+        sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1700000000)
+        sandbox.stub(IPFSModule, 'fetchMetadata').resolves({
+          title: 'Proposal Title',
+          description: 'Proposal Description',
+          summary: 'Proposal Summary',
+          resources: [],
+          media: {},
+        } as any)
+        sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({
+          address: '0xtoken-address',
+          network,
+          decimals: 18,
+          hasClockMode: true,
+          clockMode: IClockMode.BlockNumber,
+        } as any)
+        sandbox.stub(ProposalHandler, 'handleStartEndDate').resolves({ startDate: 0, endDate: 0 })
+        sandbox.stub(Models.Proposal, 'getNextIncrementalId').resolves(1)
+        sandbox.stub(ProposalHandler, 'pairSppProposals').resolves()
+        return sandbox.stub(RabbitMQHelper, 'sendMessage').resolves()
+      }
+
+      it('should snapshot the token total supply and the settings, including supportThreshold', async () => {
+        sandbox.stub(Models.Setting, 'findLastSettingByBlockNumber').resolves({
+          tokenAddress: '0xtoken-address',
+          minParticipation: 20,
+          supportThreshold: 50,
+          minDuration: 3600,
+          minProposerVotingPower: '1',
+        } as any)
+        const pastTotalSupplyStub = sandbox.stub(GovernanceErc20Helper, 'getPastTotalSupply').resolves('1000')
+        stubCommon()
+
+        await ProposalHandler.proposalCreated(fakeEvent as any, info)
+
+        const savedProposal = await Models.Proposal.findOne({
+          transactionHash: '0xcrisp-tx',
+          pluginAddress: '0xcrisp-plugin',
+          proposalIndex: '1',
+        })
+
+        expect(pastTotalSupplyStub.calledOnce).to.be.true
+        expect(savedProposal.snapshot.totalSupply).to.eq('1000')
+        expect(savedProposal.settings.supportThreshold).to.eq(50)
+        expect(savedProposal.settings.minParticipation).to.eq(20)
+      })
+
+      it('should not queue the token voting metrics job, which would overwrite the tally with zeros', async () => {
+        sandbox
+          .stub(Models.Setting, 'findLastSettingByBlockNumber')
+          .resolves({ tokenAddress: '0xtoken-address' } as any)
+        sandbox.stub(GovernanceErc20Helper, 'getPastTotalSupply').resolves('1000')
+        const rabbitMQStub = stubCommon()
+
+        await ProposalHandler.proposalCreated(fakeEvent as any, info)
+
+        const queues = rabbitMQStub.getCalls().map(call => call.args[0])
+        expect(queues).to.not.include(EnumQueueName.proposalTokenVotingMetrics)
+      })
+
+      it('should record a zero total supply and warn when the settings carry no token', async () => {
+        sandbox.stub(Models.Setting, 'findLastSettingByBlockNumber').resolves({} as any)
+        const pastTotalSupplyStub = sandbox.stub(GovernanceErc20Helper, 'getPastTotalSupply')
+        const warnStub = sandbox.stub(logger, 'warn')
+        stubCommon()
+
+        await ProposalHandler.proposalCreated(fakeEvent as any, info)
+
+        const savedProposal = await Models.Proposal.findOne({
+          transactionHash: '0xcrisp-tx',
+          pluginAddress: '0xcrisp-plugin',
+          proposalIndex: '1',
+        })
+
+        expect(pastTotalSupplyStub.called).to.be.false
+        expect(savedProposal.snapshot.totalSupply).to.eq('0')
+        expect(warnStub.calledWith('Error ProposalHandler.proposalCreated - tokenAddress is missing' as any)).to.be.true
+      })
+    })
+
     it('should handle admin proposalCreated', async () => {
       const metadataUri = 'ipfs://metadata-uri'
 

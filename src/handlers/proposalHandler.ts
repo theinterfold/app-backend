@@ -150,7 +150,13 @@ export const ProposalHandler = {
         document.endDate = endDate
       }
 
-      if (document?.settings?.tokenAddress && relatedPlugin.interfaceType === IPluginInterfaceType.tokenVoting) {
+      // CRISP snapshots voting power the same way: the quorum denominator of a proposal is the
+      // past total supply at creation, whether or not the ballots are encrypted.
+      if (
+        document?.settings?.tokenAddress &&
+        (relatedPlugin.interfaceType === IPluginInterfaceType.tokenVoting ||
+          relatedPlugin.interfaceType === IPluginInterfaceType.crisp)
+      ) {
         const token = await ProxyToken.saveAndGetToken(document.settings.tokenAddress, info.network)
 
         const totalSupply = await GovernanceErc20Helper.getPastTotalSupply({
@@ -207,7 +213,11 @@ export const ProposalHandler = {
         }
       }
 
-      if (relatedPlugin.interfaceType === IPluginInterfaceType.tokenVoting && !document?.settings?.tokenAddress) {
+      if (
+        (relatedPlugin.interfaceType === IPluginInterfaceType.tokenVoting ||
+          relatedPlugin.interfaceType === IPluginInterfaceType.crisp) &&
+        !document?.settings?.tokenAddress
+      ) {
         logger.warn(
           'Error ProposalHandler.proposalCreated - tokenAddress is missing',
           llo({
@@ -291,6 +301,10 @@ export const ProposalHandler = {
         )
       }
 
+      // Note: CRISP is deliberately absent here. The token-voting metrics job aggregates
+      // VoteCast events into votesByOption, and a CRISP plugin never emits one — the tally
+      // lives on-chain and only exists once the ciphernode committee publishes it. Enqueuing
+      // the job would write a permanent zero tally over a proposal that may well have passed.
       if (relatedPlugin.interfaceType === IPluginInterfaceType.tokenVoting) {
         allMessages.push(
           RabbitMQHelper.sendMessage(EnumQueueName.proposalTokenVotingMetrics, {

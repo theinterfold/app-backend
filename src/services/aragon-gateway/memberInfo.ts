@@ -60,7 +60,11 @@ export const MemberInfo = {
               status: IPluginStatus.installed,
             })
           : await Models.Plugin.findByAddress(pluginAddress, network)
-        if (!plugin || plugin.interfaceType !== IPluginInterfaceType.tokenVoting) {
+        if (
+          !plugin ||
+          (plugin.interfaceType !== IPluginInterfaceType.tokenVoting &&
+            plugin.interfaceType !== IPluginInterfaceType.crisp)
+        ) {
           return response
         }
         tokenAddress = plugin.tokenAddress
@@ -134,6 +138,9 @@ export const MemberInfo = {
       switch (plugin.interfaceType) {
         case IPluginInterfaceType.lockToVote:
           return await MemberInfo._checkForLockToVote(plugin, settings, memberAddress)
+        // Proposal creation is gated the same way for CRISP: voting power against
+        // minProposerVotingPower. Only the ballot is different.
+        case IPluginInterfaceType.crisp:
         case IPluginInterfaceType.tokenVoting:
           return await MemberInfo._checkForTokenVoting(plugin, settings, memberAddress)
         case IPluginInterfaceType.multisig:

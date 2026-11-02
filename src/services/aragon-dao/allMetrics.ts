@@ -46,6 +46,8 @@ export const AllMetrics = {
       onDocument: async (proposal: Proposal) => {
         const plugin = await Models.Plugin.findByAddress(proposal.pluginAddress, proposal.network)
         if (!plugin.isSupported) return
+        // CRISP is absent by design: its metrics would be aggregated from VoteCast events that
+        // an encrypted proposal never emits, overwriting nothing with zeros.
         if (plugin.interfaceType === IPluginInterfaceType.tokenVoting) {
           await ProposalMetrics.proposalTokenVotingMetrics({
             pluginAddress: proposal.pluginAddress,
