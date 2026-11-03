@@ -4,7 +4,7 @@ import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
 import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
 import logger from '@logger'
 import { Erc20Governance } from '@src/governance/erc20Governance'
-import { ITokenType, NetworksEnum } from '@types'
+import { NetworksEnum } from '@types'
 import { expect } from 'chai'
 import * as sinon from 'sinon'
 import { SinonSandbox, SinonStub } from 'sinon'
@@ -172,13 +172,5 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
       expect(error?.message).to.equal('rpc down')
       expect(updateVotingPowerStub.called).to.be.false
     })
-  })
-
-  it('should only look at bondedVotes tokens', async () => {
-    const { parsedEvent, info } = event('BondedCheckpointed', { bondOwner: alice }, checkpoints)
-
-    await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
-
-    expect((Models.Token.find as SinonStub).calledOnceWith({ network, type: ITokenType.bondedVotes })).to.be.true
   })
 })

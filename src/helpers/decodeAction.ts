@@ -485,25 +485,19 @@ class DecodeActions {
 
     const votingToken = await ProxyToken.saveAndGetToken(pluginDetails.tokenAddress, pluginDetails.network)
 
-    if (
-      pluginDetails.interfaceType !== IPluginInterfaceType.lockToVote &&
-      pluginDetails.interfaceType !== IPluginInterfaceType.tokenVoting &&
-      pluginDetails.interfaceType !== IPluginInterfaceType.crisp
-    ) {
-      logger.warn(
-        `Unsupported plugin type for voting settings update: ${pluginDetails.interfaceType}`,
-        llo({ pluginDetails, decodedData }),
-      )
-      return null
-    }
-
     switch (pluginDetails.interfaceType) {
       case IPluginInterfaceType.tokenVoting:
         return this._parseTokenVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
       case IPluginInterfaceType.crisp:
         return this._parseCrispVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
-      default:
+      case IPluginInterfaceType.lockToVote:
         return this._parseLockToVoteVotingSettingUpdateAction(decodedData, action, document, pluginDetails, votingToken)
+      default:
+        logger.warn(
+          `Unsupported plugin type for voting settings update: ${pluginDetails.interfaceType}`,
+          llo({ pluginDetails, decodedData }),
+        )
+        return null
     }
   }
 
