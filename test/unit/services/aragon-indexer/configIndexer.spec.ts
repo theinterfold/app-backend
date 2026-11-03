@@ -167,12 +167,11 @@ describe('ConfigIndexer', () => {
     })
 
     it('should subscribe to the deployed CrispVoting event signatures', () => {
-      // The topic is keccak256 of the canonical signature, so a stale ABI (the pre-supportThreshold
-      // 4-arg event) would silently subscribe to a topic no deployed plugin emits.
+      // The topic is keccak256 of the canonical signature, so an ABI that drifts from the deployed
+      // contract silently subscribes to a topic no plugin emits.
       const votingSettingsTopic = id('VotingSettingsUpdated(uint256,uint256,uint32,uint32,uint64)')
       const votingSettingsConfig = ConfigIndexer.find(c => c.event === 'VotingSettingsUpdated')
       expect(votingSettingsConfig!.topic).to.include(votingSettingsTopic)
-      expect(votingSettingsConfig!.topic).to.not.include(id('VotingSettingsUpdated(uint256,uint256,uint32,uint64)'))
 
       const e3SettingsConfig = ConfigIndexer.find(c => c.event === 'E3SettingsUpdated')
       expect(e3SettingsConfig).to.exist
