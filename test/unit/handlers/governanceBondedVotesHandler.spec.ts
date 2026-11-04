@@ -20,14 +20,14 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
   let delegateChangedBatchStub: SinonStub
 
   const network = NetworksEnum.ethereumSepolia
-  const token = '0x1C721DE6a736054DBE7E8fcE99A68b76D4f603fb'
-  const checkpoints = '0x4b4b85F007c241bD8bf22C951efe0f44D82aE6D1'
-  const votesSource = '0xeFFdE23b6D897035F47499b66071F3f4696fb2A9'
+  const token = '0x4444444444444444444444444444444444444444'
+  const checkpoints = '0x5555555555555555555555555555555555555555'
+  const votesSource = '0x6666666666666666666666666666666666666666'
   const alice = '0x1111111111111111111111111111111111111111'
   const bob = '0x2222222222222222222222222222222222222222'
   const carol = '0x3333333333333333333333333333333333333333'
   const zero = '0x0000000000000000000000000000000000000000'
-  const plugin = { address: '0x67a45F581B3c46E0aB379c62B1d279c72eDA8079', daoAddress: '0xDao' }
+  const plugin = { address: '0x7777777777777777777777777777777777777777', daoAddress: '0xDao' }
 
   const event = (name: string, args: Record<string, string>, address: string, blockNumber = 10) => ({
     parsedEvent: { name, args } as any,
