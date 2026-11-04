@@ -1,4 +1,5 @@
 import { retryRequest } from '@helpers/retryRequest'
+import utils from '@helpers/utils'
 import BottleneckModule from '@modules/bottleneck'
 import ProviderModule from '@modules/provider'
 import { type HexAddress, type NetworksEnum } from '@types'
@@ -7,6 +8,7 @@ import { Contract } from 'ethers'
 const abi = [
   'function checkpoints() view returns (address)',
   'function votesSource() view returns (address)',
+  'function escrow() view returns (address)',
   'function getVotes(address) view returns (uint256)',
   'function bondedDelegate(address) view returns (address)',
 ]
@@ -14,16 +16,38 @@ const abi = [
 export interface IBondedVotesSources {
   checkpoints: HexAddress
   votesSource: HexAddress
+  // the escrow behind an escrow votes source, null when the token votes for itself
+  escrow: HexAddress | null
 }
 
-// Both are immutable in BondedVotes, so they are read once per token.
+// All immutable in BondedVotes, so they are read once per token.
 const sourcesCache = new Map<string, IBondedVotesSources>()
+const startBlockCache = new Map<string, number>()
 
 const read = async (token: HexAddress, network: NetworksEnum, method: string, ...args: string[]): Promise<any> => {
   const contract = new Contract(token, abi, ProviderModule.getAnyRpcProvider(network))
   return retryRequest(async () =>
     BottleneckModule.getNodeLimiter(network).schedule(async () => contract[method](...args)),
   )
+}
+
+// Smallest block at which `address` has code. Needs an archive node, like any historical crawl.
+const getCreationBlock = async (address: HexAddress, network: NetworksEnum): Promise<number> => {
+  const provider = ProviderModule.getAnyRpcProvider(network)
+  const schedule = async <T>(call: () => Promise<T>): Promise<T> =>
+    retryRequest(async () => BottleneckModule.getNodeLimiter(network).schedule(call))
+  const hasCode = async (block: number) => (await schedule(async () => provider.getCode(address, block))) !== '0x'
+
+  let high = await schedule(async () => provider.getBlockNumber())
+  if (!(await hasCode(high))) throw new Error(`No contract code at ${address}`)
+
+  let low = 0
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (await hasCode(mid)) high = mid
+    else low = mid + 1
+  }
+  return low
 }
 
 // RPC errors propagate on purpose: skipping an account would leave its voting power stale for good.
@@ -33,12 +57,30 @@ const GovernanceBondedVotesHelper = {
     const cached = sourcesCache.get(key)
     if (cached) return cached
 
-    const [checkpoints, votesSource] = await Promise.all([
+    const [checkpoints, votesSource, escrow] = await Promise.all([
       read(token, network, 'checkpoints'),
       read(token, network, 'votesSource'),
+      read(token, network, 'escrow'),
     ])
-    sourcesCache.set(key, { checkpoints, votesSource })
-    return { checkpoints, votesSource }
+    const sources = { checkpoints, votesSource, escrow: escrow === utils.zeroAddress ? null : escrow }
+    sourcesCache.set(key, sources)
+    return sources
+  },
+
+  // First block of the history behind the token's voting power. The votes source and its escrow are
+  // deployed before BondedVotes, and carry the delegations and locks, so the token's own creation block
+  // (or the plugin's) would skip them.
+  async getStartBlock(token: HexAddress, network: NetworksEnum): Promise<number> {
+    const key = `${network}-${token}`
+    const cached = startBlockCache.get(key)
+    if (cached !== undefined) return cached
+
+    const { checkpoints, votesSource, escrow } = await GovernanceBondedVotesHelper.getSources(token, network)
+    const contracts = [...new Set([token, checkpoints, votesSource, escrow])].filter((a): a is HexAddress => !!a)
+    const blocks = await Promise.all(contracts.map(async address => getCreationBlock(address, network)))
+    const startBlock = Math.min(...blocks)
+    startBlockCache.set(key, startBlock)
+    return startBlock
   },
 
   // Voting power as the voting plugins read it: votes source plus bonded weight.
