@@ -3767,6 +3767,90 @@ describe('ProposalHandler', () => {
       expect(updated.stageExecutions[0].stageIndex).to.equal(1)
     })
 
+    describe('when the sub-proposal of the new stage is indexed after the advance', () => {
+      const subPluginAddress = '0xNextStageSubPlugin'
+      const advancedInfo = (parent: any) => ({
+        transactionHash: '0xAdvancedTx',
+        address: parent.pluginAddress,
+        blockNumber: 500,
+        network,
+        eventName: 'ProposalAdvanced',
+        transactionIndex: 1,
+        logIndex: 2,
+      })
+
+      const setup = async () => {
+        const parentProposal = await Models.Proposal.create({
+          ...ProposalList[0],
+          network,
+          subProposals: [],
+          stageExecutions: [],
+        })
+        const plugin = await Models.Plugin.create({
+          ...PluginList[0],
+          network,
+          interfaceType: IPluginInterfaceType.spp,
+          subPlugins: [{ stageIndex: 1, addresses: [subPluginAddress] }],
+        })
+        sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1800000000)
+        sandbox.stub(ProposalHelper, 'getSppSubPluginProposals').resolves(7)
+        sandbox.stub(ProposalHelper, 'getProposal').resolves({ lastStageTransition: 1800000000 } as any)
+        sandbox.stub(Models.Plugin, 'findByAddress').resolves(plugin as any)
+        sandbox.stub(logger, 'verbose')
+        sandbox.stub(logger, 'warn')
+        return parentProposal
+      }
+
+      const createSubProposal = async (parentProposal: any) =>
+        Models.Proposal.create({
+          ...ProposalList[1],
+          daoAddress: parentProposal.daoAddress,
+          proposalIndex: '7',
+          network,
+          pluginAddress: subPluginAddress,
+        })
+
+      it('links the sub-proposal to its parent when the body proposal lands after the advance', async () => {
+        const parentProposal = await setup()
+
+        await ProposalHandler.proposalAdvanced(
+          { args: { proposalId: 0n, stageId: 1n } } as any,
+          advancedInfo(parentProposal),
+        )
+        expect((await Models.Proposal.findById(parentProposal._id)).subProposals).to.have.length(1)
+
+        const subProposal = await createSubProposal(parentProposal)
+        await ProposalHandler.pairSppProposals(
+          subProposal,
+          { isSubPlugin: true, stageIndex: 1, parentPlugin: parentProposal.pluginAddress } as any,
+          { transactionHash: '0xSubTx' } as any,
+        )
+
+        const updatedSub = await Models.Proposal.findById(subProposal._id)
+        expect(updatedSub.parentProposal).to.deep.include({
+          pluginAddress: parentProposal.pluginAddress,
+          proposalIndex: parentProposal.proposalIndex,
+          stageIndex: 1,
+          transactionHash: '0xAdvancedTx',
+          blockNumber: 500,
+        })
+      })
+
+      it('does not link the sub-proposal when the parent update did not commit', async () => {
+        const parentProposal = await setup()
+        const subProposal = await createSubProposal(parentProposal)
+        sandbox.stub(DbOperations, 'updateDocument').resolves(null)
+
+        await ProposalHandler.proposalAdvanced(
+          { args: { proposalId: 0n, stageId: 1n } } as any,
+          advancedInfo(parentProposal),
+        )
+
+        const updatedSub = await Models.Proposal.findById(subProposal._id)
+        expect(updatedSub.parentProposal).to.not.exist
+      })
+    })
+
     it('should log a warning when the proposal is not found', async () => {
       const info = {
         transactionHash: '0xTx',
@@ -3843,7 +3927,11 @@ describe('ProposalHandler', () => {
       const updatedSubProposal = await Models.Proposal.findById(executedSubProposal._id)
       expect(updatedSubProposal.executed.status).to.be.true
       expect(updatedSubProposal.executed.transactionHash).to.be.null
-      expect(verboseLoggerStub.calledWith('Updated document - Update subProposal with length: 2' as any)).to.be.true
+      expect(updatedSubProposal.parentProposal).to.deep.include({
+        proposalIndex: parentProposal.proposalIndex,
+        pluginAddress: parentProposal.pluginAddress,
+        stageIndex: 2,
+      })
       expect(verboseLoggerStub.calledWith('Updated document - Proposal Updated - lastStageTransition' as any)).to.be
         .true
     })
@@ -3910,9 +3998,7 @@ describe('ProposalHandler', () => {
 
       await ProposalHandler.proposalAdvanced(fakeEvent as any, info)
 
-      expect(updateDocumentStub.callCount).to.be.equal(1)
-      expect(updateDocumentStub.args[0][3]).to.be.eq('Update subProposal with length: 1')
-      expect(updateDocumentStub.args[0][3]).to.be.not.eq('Proposal Updated - lastStageTransition')
+      expect(updateDocumentStub.called).to.be.false
       expect(warnLoggerStub.calledOnceWith('Stage execution already exists in the array' as any)).to.be.true
     })
 
@@ -3976,8 +4062,10 @@ describe('ProposalHandler', () => {
 
       await ProposalHandler.proposalAdvanced(fakeEvent as any, info)
 
-      expect(errorStub.calledOnceWith('Error Sub Proposal not not found' as any)).to.be.true
-      expect(warnLoggerStub.calledOnceWith('Sub proposal not found' as any)).to.be.true
+      expect(errorStub.called).to.be.false
+      expect(warnLoggerStub.calledWith('Sub proposal not found' as any)).to.be.true
+      expect(warnLoggerStub.calledWith('Sub proposal not indexed yet, it links to its parent when it lands' as any)).to
+        .be.true
       expect(verboseLoggerStub.calledWith('Updated document - Proposal Updated - lastStageTransition' as any)).to.be
         .true
     })
@@ -4027,13 +4115,14 @@ describe('ProposalHandler', () => {
       sandbox.stub(ProposalHelper, 'getProposal').resolves({ lastStageTransition: 1800000000 } as any)
       sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1800000000)
 
-      const errorLoggerStub = sandbox.stub(logger, 'error')
+      const warnLoggerStub = sandbox.stub(logger, 'warn')
 
       const verboseLoggerStub = sandbox.stub(logger, 'verbose')
 
       await ProposalHandler.proposalAdvanced(fakeEvent as any, info)
 
-      expect(errorLoggerStub.calledOnceWith('Error Sub Proposal not not found' as any)).to.be.true
+      expect(warnLoggerStub.calledWith('Sub proposal not indexed yet, it links to its parent when it lands' as any)).to
+        .be.true
       expect(verboseLoggerStub.calledWith('Updated document - Proposal Updated - lastStageTransition' as any)).to.be
         .true
     })
@@ -5010,6 +5099,106 @@ describe('ProposalHandler', () => {
       expect(updatedParentProposal.stageIndex).to.equal(0)
       expect(updatedParentProposal.lastStageTransition).to.equal(1700000000)
       expect(updatedParentProposal.subProposals).to.be.an('array').that.is.empty
+    })
+
+    describe('when the sub-proposal is indexed after the SPP proposal was paired', () => {
+      const sppPlugin = {
+        interfaceType: IPluginInterfaceType.spp,
+        totalStages: 1,
+        address: '0xParentPlugin',
+        network,
+        subPlugins: [{ stageIndex: 0, addresses: ['0xSubPluginAddress'] }],
+        isSubPlugin: false,
+      }
+      const subPlugin = {
+        interfaceType: IPluginInterfaceType.tokenVoting,
+        address: '0xSubPluginAddress',
+        parentPlugin: '0xParentPlugin',
+        isSubPlugin: true,
+        stageIndex: 0,
+      }
+      const info = { transactionHash: '0xSppTx', blockNumber: 100 }
+
+      const pairParent = async (parentProposal: any) => {
+        sandbox.stub(ProposalHelper, 'getProposal').resolves({
+          currentStage: 1n,
+          lastStageTransition: 1700000000n,
+        } as any)
+        sandbox.stub(ProposalHelper, 'getSppSubPluginProposals').resolves(2)
+        await ProposalHandler.pairSppProposals(parentProposal, sppPlugin as any, info as any)
+      }
+
+      it('links the parent proposal when the sub-proposal lands after the SPP pairing', async () => {
+        const parentProposal = await Models.Proposal.create({
+          ...ProposalList[0],
+          proposalIndex: '1',
+          network,
+          pluginAddress: '0xParentPlugin',
+        })
+
+        // the SPP proposal is paired while the body has not indexed its proposal yet
+        await pairParent(parentProposal)
+        expect(await Models.Proposal.countDocuments({ pluginAddress: '0xSubPluginAddress' })).to.equal(0)
+
+        const subProposal = await Models.Proposal.create({
+          ...ProposalList[1],
+          daoAddress: parentProposal.daoAddress,
+          proposalIndex: '2',
+          network,
+          pluginAddress: '0xSubPluginAddress',
+        })
+
+        await ProposalHandler.pairSppProposals(subProposal, subPlugin as any, { transactionHash: '0xSubTx' } as any)
+
+        const updatedSub = await Models.Proposal.findById(subProposal._id)
+        expect(updatedSub.isSubProposal).to.be.true
+        expect(updatedSub.stageIndex).to.equal(0)
+        expect(updatedSub.parentProposal).to.deep.include({
+          pluginAddress: '0xParentPlugin',
+          proposalIndex: '1',
+          stageIndex: 0,
+          transactionHash: '0xSppTx',
+          blockNumber: 100,
+        })
+      })
+
+      it('does not link a sub-proposal of another DAO', async () => {
+        const parentProposal = await Models.Proposal.create({
+          ...ProposalList[0],
+          proposalIndex: '1',
+          network,
+          pluginAddress: '0xParentPlugin',
+        })
+        await pairParent(parentProposal)
+
+        const foreignProposal = await Models.Proposal.create({
+          ...ProposalList[1],
+          daoAddress: '0x2222222222222222222222222222222222222222',
+          proposalIndex: '2',
+          network,
+          pluginAddress: '0xSubPluginAddress',
+        })
+
+        await ProposalHandler.pairSppProposals(foreignProposal, subPlugin as any, { transactionHash: '0xSubTx' } as any)
+
+        const updatedForeign = await Models.Proposal.findById(foreignProposal._id)
+        expect(updatedForeign.parentProposal).to.not.exist
+      })
+
+      it('leaves the sub-proposal unlinked while no SPP proposal lists it', async () => {
+        const subProposal = await Models.Proposal.create({
+          ...ProposalList[1],
+          proposalIndex: '2',
+          network,
+          pluginAddress: '0xSubPluginAddress',
+        })
+
+        await ProposalHandler.pairSppProposals(subProposal, subPlugin as any, { transactionHash: '0xSubTx' } as any)
+
+        const updatedSub = await Models.Proposal.findById(subProposal._id)
+        expect(updatedSub.isSubProposal).to.be.true
+        expect(updatedSub.parentProposal).to.not.exist
+      })
     })
   })
 
