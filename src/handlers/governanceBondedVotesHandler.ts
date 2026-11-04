@@ -13,7 +13,8 @@ const llo = logger.logMeta.bind(null, { service: 'handlers:GovernanceBondedVotes
 type IEvent = { parsedEvent: LogDescription; info: ILogInfo }
 
 // BondedVotes emits no DelegateVotesChanged: its voting power moves with bonds and bonded
-// delegation, plus the votes source it wraps (an ERC20Votes token or an escrow adapter).
+// delegation, plus the votes source it wraps (an ERC20Votes token, or an escrow adapter and the
+// escrow behind it).
 // Events name the accounts that changed; the new power is read from the contract.
 const affectedAccounts = ({ parsedEvent: { name, args } }: IEvent): string[] => {
   switch (name) {
@@ -25,6 +26,9 @@ const affectedAccounts = ({ parsedEvent: { name, args } }: IEvent): string[] => 
       return [args.delegate]
     case 'DelegateChanged':
       return [args.delegator, args.fromDelegate, args.toDelegate]
+    case 'Deposit':
+    case 'Withdraw':
+      return [args.depositor]
     default:
       return []
   }
@@ -37,8 +41,8 @@ const findTokens = async (emitter: string, network: NetworksEnum): Promise<HexAd
 
   return tokens
     .filter((token, i) =>
-      [token.address, sources[i].checkpoints, sources[i].votesSource].some(
-        address => address.toLowerCase() === emitter.toLowerCase(),
+      [token.address, sources[i].checkpoints, sources[i].votesSource, sources[i].escrow].some(
+        address => address?.toLowerCase() === emitter.toLowerCase(),
       ),
     )
     .map(token => token.address)

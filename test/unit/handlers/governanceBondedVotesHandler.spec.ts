@@ -23,6 +23,7 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
   const token = '0x4444444444444444444444444444444444444444'
   const checkpoints = '0x5555555555555555555555555555555555555555'
   const votesSource = '0x6666666666666666666666666666666666666666'
+  const escrow = '0x8888888888888888888888888888888888888888'
   const alice = '0x1111111111111111111111111111111111111111'
   const bob = '0x2222222222222222222222222222222222222222'
   const carol = '0x3333333333333333333333333333333333333333'
@@ -38,7 +39,7 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
     sandbox = sinon.createSandbox()
     sandbox.stub(logger, 'error')
     sandbox.stub(Models.Token, 'find').resolves([{ address: token }] as any)
-    sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves({ checkpoints, votesSource })
+    sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves({ checkpoints, votesSource, escrow })
     getVotesStub = sandbox.stub(GovernanceBondedVotesHelper, 'getVotes').callsFake(async (_t, _n, account) => {
       return account === alice ? 100n : 5n
     })
@@ -124,6 +125,31 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
         bob,
         carol,
       ])
+    })
+
+    it('should refresh the depositor on an escrow Deposit and Withdraw', async () => {
+      const deposit = event('Deposit', { depositor: alice }, escrow, 10)
+      const withdraw = event('Withdraw', { depositor: bob }, escrow, 12)
+
+      await GovernanceBondedVotesHandler.votingPowerChangedBatch([deposit, withdraw])
+
+      expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: alice, votingPower: '100', lastVPBlockNumber: 10 },
+        { memberAddress: bob, votingPower: '5', lastVPBlockNumber: 12 },
+      ])
+      expect(createMembersStub.firstCall.args[0].map((member: any) => member.memberAddress)).to.have.members([
+        alice,
+        bob,
+      ])
+    })
+
+    it('should match a token whose votes source has no escrow', async () => {
+      ;(GovernanceBondedVotesHelper.getSources as SinonStub).resolves({ checkpoints, votesSource, escrow: null })
+      const { parsedEvent, info } = event('DelegateVotesChanged', { delegate: bob }, votesSource)
+
+      await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
+
+      expect(updateVotingPowerStub.calledOnce).to.be.true
     })
 
     it('should read each account once, at the latest block that touched it', async () => {

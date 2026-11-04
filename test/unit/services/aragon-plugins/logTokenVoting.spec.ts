@@ -10,6 +10,7 @@ import {
   IPluginInterfaceType,
   ITokenType,
   IVotingEscrowAdapterLogs,
+  IVotingEscrowIncreasingLogs,
   NetworksEnum,
 } from '@types'
 import { expect } from 'chai'
@@ -894,25 +895,36 @@ describe('AragonPlugins: LogTokenVoting', () => {
       network: token.network,
       blockNumber: 100,
     } as any
-    const sources = { checkpoints: '0xCheckpoints', votesSource: '0xVotesSource' }
+    const sources = { checkpoints: '0xCheckpoints', votesSource: '0xVotesSource', escrow: '0xEscrow' }
+    const startBlock = 20
 
     beforeEach(() => {
       sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves(sources)
+      sandbox.stub(GovernanceBondedVotesHelper, 'getStartBlock').resolves(startBlock)
     })
 
-    it('should crawl the BondedVotes events from the token, its checkpoints and its votes source', async () => {
+    it('should crawl the BondedVotes events from the token, checkpoints, votes source and escrow', async () => {
       const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
-      const { address, events, fromBlock, logService } = (crawler as any).crawlParams
+      const { address, events, logService } = (crawler as any).crawlParams
 
-      expect(address).to.deep.equal([token.address, sources.checkpoints, sources.votesSource])
-      expect(fromBlock).to.equal(token.blockNumber)
+      expect(address).to.deep.equal([token.address, sources.checkpoints, sources.votesSource, sources.escrow])
       expect(logService).to.equal(`bondedVotes-${token.network}-${token.address}`)
       expect(events.map((item: any) => item.event)).to.have.members([
         IBondedVotesLogs.BondedDelegateChanged,
         IBondedVotesLogs.BondedCheckpointed,
         IGovernanceErc20Logs.DelegateVotesChanged,
         IVotingEscrowAdapterLogs.DelegateChanged,
+        IVotingEscrowIncreasingLogs.Deposit,
+        IVotingEscrowIncreasingLogs.Withdraw,
       ])
+    })
+
+    it('should start from the first block of the contracts it reads, not the token or the plugin block', async () => {
+      const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
+
+      expect((crawler as any).crawlParams.fromBlock).to.equal(startBlock)
+      expect(startBlock).to.be.lessThan(token.blockNumber)
+      expect(startBlock).to.be.lessThan(plugin.blockNumber)
     })
 
     it('should refresh voting power on votes source delegation instead of the ERC20 / escrow handlers', async () => {
@@ -932,6 +944,7 @@ describe('AragonPlugins: LogTokenVoting', () => {
       ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).resolves({
         checkpoints: '0xCheckpoints',
         votesSource: token.address,
+        escrow: null,
       })
 
       const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)

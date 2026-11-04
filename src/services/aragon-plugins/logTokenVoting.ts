@@ -8,6 +8,7 @@ import type Plugin from '@models/schema/plugin'
 import type Token from '@models/schema/token'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import {
+  type HexAddress,
   IBondedVotesLogs,
   ICrispVotingLogs,
   IExitQueueLogs,
@@ -133,11 +134,17 @@ export const LogTokenVoting = {
   },
 
   buildBondedVotesCrawler: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {
-    const { checkpoints, votesSource } = await GovernanceBondedVotesHelper.getSources(token.address, plugin.network)
-    // delegation on the wrapped votes source (ERC20Votes token or escrow adapter) moves voting power too
+    const { checkpoints, votesSource, escrow } = await GovernanceBondedVotesHelper.getSources(
+      token.address,
+      plugin.network,
+    )
+    // voting power also moves with the wrapped votes source: delegation on an ERC20Votes token or an escrow
+    // adapter, and locks on the escrow behind it
     const votesSourceLogs: string[] = [
       IGovernanceErc20Logs.DelegateVotesChanged,
       IVotingEscrowAdapterLogs.DelegateChanged,
+      IVotingEscrowIncreasingLogs.Deposit,
+      IVotingEscrowIncreasingLogs.Withdraw,
     ]
     const events = configIndexer
       .filter(
@@ -162,8 +169,10 @@ export const LogTokenVoting = {
       onlyHistorical: isHistorical,
       network: plugin.network,
       events,
-      address: [...new Set([token.address, checkpoints, votesSource])],
-      fromBlock: token?.blockNumber || plugin.blockNumber,
+      address: [...new Set([token.address, checkpoints, votesSource, escrow])].filter(
+        (address): address is HexAddress => !!address,
+      ),
+      fromBlock: await GovernanceBondedVotesHelper.getStartBlock(token.address, plugin.network),
       onError: async (error: any, log: any) => LogTokenVoting.processError(error, plugin, log),
       logService: ConfigIndexerHelper.builders.token(ITokenType.bondedVotes, plugin.network, token.address),
       stopOnError: true,
