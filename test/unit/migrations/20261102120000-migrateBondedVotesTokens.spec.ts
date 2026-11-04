@@ -15,9 +15,9 @@ describe('migration: migrateBondedVotesTokens', () => {
   let sandbox: SinonSandbox
   let sendMessageStub: SinonStub
 
-  const bondedAddress = '0x1C721DE6a736054DBE7E8fcE99A68b76D4f603fb'
+  const bondedAddress = '0x4444444444444444444444444444444444444444'
   const adapterAddress = '0x2222222222222222222222222222222222222222'
-  const pluginAddress = '0x67a45F581B3c46E0aB379c62B1d279c72eDA8079'
+  const pluginAddress = '0x7777777777777777777777777777777777777777'
   const daoAddress = '0xabCDef1234567890abCdEF1234567890ABcDeF12'
   const network = NetworksEnum.ethereumSepolia
 
@@ -35,8 +35,8 @@ describe('migration: migrateBondedVotesTokens', () => {
       blockNumber: 1000,
       transactionHash: '0xinstall',
       votingEscrow: {
-        escrowAddress: '0xDfcA4d9769E0Fb6Ab93413A8c43DCeBF4055C1BC',
-        exitQueueAddress: '0xDf33F7eBEF7Ff3ee33d339D8fe5A1cB2Ba4AE48D',
+        escrowAddress: '0x8888888888888888888888888888888888888888',
+        exitQueueAddress: '0x9999999999999999999999999999999999999999',
       },
     })
 
@@ -80,9 +80,9 @@ describe('migration: migrateBondedVotesTokens', () => {
         logIndex: 0,
         blockNumber: 1001,
         memberAddress: '0x1111111111111111111111111111111111111111',
-        escrowAddress: '0xDfcA4d9769E0Fb6Ab93413A8c43DCeBF4055C1BC',
-        exitQueueAddress: '0xDf33F7eBEF7Ff3ee33d339D8fe5A1cB2Ba4AE48D',
-        nftAddress: '0x64aAcD02Bf9a1f7e2d929CdF5Cbbb5B963b05eF5',
+        escrowAddress: '0x8888888888888888888888888888888888888888',
+        exitQueueAddress: '0x9999999999999999999999999999999999999999',
+        nftAddress: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       })
 
       await migrateBondedVotesToken(token)
