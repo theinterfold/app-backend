@@ -837,6 +837,8 @@ export const ProposalHandler = {
         }
       })
 
+      const newSubProposals: Proposal['subProposals'] = []
+
       for (const address of subPlugins.addresses) {
         const proposalIndex = await ProposalHelper.getSppSubPluginProposals(
           proposal.proposalIndex,
@@ -865,41 +867,15 @@ export const ProposalHandler = {
           continue
         }
 
-        subProposals.push({
-          proposalIndex,
+        const newSubProposal = {
+          proposalIndex: proposalIndex.toString(),
           stageIndex: newStage,
           pluginAddress: address,
           transactionHash: info.transactionHash,
           blockNumber: info.blockNumber,
-        })
-
-        const subProposalDb = await Models.Proposal.findByProposalIndex(
-          proposalIndex.toString(),
-          address,
-          plugin.network,
-          proposal.daoAddress,
-        )
-
-        if (!subProposalDb) {
-          logger.error('Error Sub Proposal not not found', llo({ proposalIndex, address, plugin }))
-          continue
         }
-
-        await DbOperations.updateDocument(
-          subProposalDb,
-          {
-            parentProposal: {
-              pluginAddress: proposal.pluginAddress,
-              proposalIndex: proposal.proposalIndex,
-              stageIndex: newStage,
-              transactionHash: info.transactionHash,
-              blockNumber: info.blockNumber,
-            },
-          },
-          { logId: proposal.id },
-          'Update subProposal with length: ' + subProposals.length,
-          llo,
-        )
+        subProposals.push(newSubProposal)
+        newSubProposals.push(newSubProposal)
       }
 
       const proposalInfo = (await ProposalHelper.getProposal({
@@ -947,7 +923,7 @@ export const ProposalHandler = {
         status: true,
       })
 
-      await DbOperations.updateDocument(
+      const updatedProposal = await DbOperations.updateDocument(
         proposal,
         {
           lastStageTransition: Number(proposalInfo.lastStageTransition),
@@ -959,6 +935,12 @@ export const ProposalHandler = {
         'Proposal Updated - lastStageTransition',
         llo,
       )
+
+      // Link only once the parent lists the sub-proposals: a body proposal indexed in the meantime links itself from
+      // the parent's list, so the parent must be visible before this side looks for the sub-proposals
+      if (updatedProposal) {
+        await ProposalHandler.linkParentToSubProposals(proposal, newSubProposals, info.network)
+      }
     } catch (error) {
       logger.error('Error ProposalAdvanced', llo({ ...info, error, parsedEvent }))
     }
@@ -1020,6 +1002,9 @@ export const ProposalHandler = {
       return
     }
 
+    // The SPP and each of its bodies are crawled independently, so either proposal can be indexed first. Every side
+    // therefore commits its own record before it looks for the other one: whichever lands last always finds its
+    // counterpart, and the pairing no longer depends on the order the crawlers run in.
     if (plugin.isSubPlugin) {
       await DbOperations.updateDocument(
         proposal,
@@ -1031,6 +1016,8 @@ export const ProposalHandler = {
         'Update proposal - Sub Proposal',
         llo,
       )
+
+      await ProposalHandler.linkSubProposalToParent(proposal)
       return
     }
 
@@ -1062,6 +1049,8 @@ export const ProposalHandler = {
     )
 
     try {
+      let subProposals: Proposal['subProposals'] = []
+
       await DbTx.executeTxFn(async ({ session }) => {
         proposal = await proposal.reload({ session })
 
@@ -1071,50 +1060,101 @@ export const ProposalHandler = {
         proposal.totalStages = plugin.totalStages
         proposal.subProposals = []
 
-        await Promise.all(
-          subPluginData.map(async ({ address, proposalIndex }) => {
-            if (proposalIndex !== false) {
-              proposal.subProposals.push({
-                proposalIndex: proposalIndex.toString(),
-                stageIndex: proposal.stageIndex,
-                pluginAddress: address,
-                transactionHash: info.transactionHash,
-                blockNumber: info.blockNumber,
-              })
-            }
+        for (const { address, proposalIndex } of subPluginData) {
+          if (proposalIndex === false) continue
 
-            const subProposalDb = await Models.Proposal.findByProposalIndex(
-              proposalIndex.toString(),
-              address,
-              plugin.network,
-              proposal.daoAddress,
-              { session },
-            )
-
-            if (subProposalDb) {
-              await subProposalDb.update(
-                {
-                  parentProposal: {
-                    pluginAddress: proposal.pluginAddress,
-                    proposalIndex: proposal.proposalIndex,
-                    stageIndex: proposal.stageIndex,
-                    transactionHash: info.transactionHash,
-                    blockNumber: info.blockNumber,
-                  },
-                },
-                { session },
-              )
-            }
-          }),
-        )
+          proposal.subProposals.push({
+            proposalIndex: proposalIndex.toString(),
+            stageIndex: proposal.stageIndex,
+            pluginAddress: address,
+            transactionHash: info.transactionHash,
+            blockNumber: info.blockNumber,
+          })
+        }
 
         await proposal.save({ session })
         await DbTx.safeCommit(session)
+        subProposals = proposal.subProposals
         logger.verbose('Update proposal - pairSppProposals', llo({ logId: proposal.id, info }))
       })
+
+      // Link the sub-proposals only after the parent is committed, outside the transaction: the transaction reads from
+      // a snapshot taken before it started, which would not contain a sub-proposal indexed in the meantime
+      await ProposalHandler.linkParentToSubProposals(proposal, subProposals, plugin.network)
     } catch (error) {
       logger.error('Error pairSppProposals', llo({ error, network: proposal.network, proposalId: proposal.id }))
     }
+  },
+
+  /**
+   * Sets `parentProposal` on every listed sub-proposal that is already indexed. Atomic and idempotent, so it can be
+   * re-run; sub-proposals indexed later are linked by `linkSubProposalToParent`.
+   * The parent MUST already be committed with these `subProposals` before this runs.
+   */
+  linkParentToSubProposals: async (parent: Proposal, subProposals: Proposal['subProposals'], network: NetworksEnum) => {
+    await Promise.all(
+      subProposals.map(async subProposal => {
+        const result = await Models.Proposal.updateOne(
+          {
+            proposalIndex: subProposal.proposalIndex,
+            pluginAddress: subProposal.pluginAddress,
+            network,
+            daoAddress: parent.daoAddress,
+          },
+          {
+            $set: {
+              parentProposal: {
+                pluginAddress: parent.pluginAddress,
+                proposalIndex: parent.proposalIndex,
+                stageIndex: subProposal.stageIndex,
+                transactionHash: subProposal.transactionHash,
+                blockNumber: subProposal.blockNumber,
+              },
+            },
+          },
+        )
+
+        if (result.matchedCount === 0) {
+          logger.warn('Sub proposal not indexed yet, it links to its parent when it lands', llo({ subProposal }))
+        }
+      }),
+    )
+  },
+
+  /**
+   * Sets `parentProposal` on a sub-proposal from the SPP proposal that already lists it in `subProposals`.
+   * Covers the case where the sub-proposal is indexed after the SPP proposal paired it, in which case the SPP side
+   * found nothing to link.
+   */
+  linkSubProposalToParent: async (subProposal: Proposal) => {
+    const parent = await Models.Proposal.findOne({
+      network: subProposal.network,
+      daoAddress: subProposal.daoAddress,
+      subProposals: {
+        $elemMatch: { pluginAddress: subProposal.pluginAddress, proposalIndex: subProposal.proposalIndex },
+      },
+    })
+
+    const entry = parent?.subProposals.find(
+      sp => sp.pluginAddress === subProposal.pluginAddress && sp.proposalIndex === subProposal.proposalIndex,
+    )
+
+    if (!parent || !entry) return
+
+    await Models.Proposal.updateOne(
+      { _id: subProposal._id },
+      {
+        $set: {
+          parentProposal: {
+            pluginAddress: parent.pluginAddress,
+            proposalIndex: parent.proposalIndex,
+            stageIndex: entry.stageIndex,
+            transactionHash: entry.transactionHash,
+            blockNumber: entry.blockNumber,
+          },
+        },
+      },
+    )
   },
 
   proposalCanceled: async (parsedEvent: LogDescription, info: ILogInfo) => {
