@@ -366,6 +366,14 @@ export default class Proposal extends Model {
   @prop({ type: () => Number })
   public failureReason?: number
 
+  // Interfold `E3Stage` of an unsettled round, as the last round sweep read it
+  @prop({ type: () => Number })
+  public e3Stage?: number
+
+  // Unix seconds after which the round can be marked failed in `e3Stage`, unset when the stage has no such deadline
+  @prop({ type: () => Number })
+  public e3StageDeadline?: number
+
   // Tally counts are in units of this divisor
   @prop({ type: () => String })
   public votingPowerDivisor?: string
@@ -836,6 +844,8 @@ export default class Proposal extends Model {
           e3Id: 1,
           isTallyPublished: 1,
           failureReason: 1,
+          e3Stage: 1,
+          e3StageDeadline: 1,
           votingPowerDivisor: 1,
         },
       },
@@ -1233,6 +1243,8 @@ export default class Proposal extends Model {
           e3Id: 1,
           isTallyPublished: 1,
           failureReason: 1,
+          e3Stage: 1,
+          e3StageDeadline: 1,
           votingPowerDivisor: 1,
           ...(extraParams.daoInfo && { dao: 1 }),
         },

@@ -1,4 +1,5 @@
 import type CrispHelperType from '@helpers/crisp'
+import { E3Stage } from '@helpers/crisp'
 import BottleneckModule from '@modules/bottleneck'
 import ProviderModule from '@modules/provider'
 import { NetworksEnum } from '@types'
@@ -77,6 +78,30 @@ describe('Helpers: CrispHelper', () => {
 
     expect(await helper.checkFailureCondition(interfold, '7', network)).to.deep.equal({ canFail: true, reason: 3 })
     expect(calls).to.deep.equal([{ address: interfold, method: 'checkFailureCondition', args: ['7'] }])
+  })
+
+  it('should pick the deadline the coordinator fails the round on in its stage', async () => {
+    const helper = load({ getDeadlines: { dkgDeadline: 10n, computeDeadline: 20n, decryptionDeadline: 30n } })
+
+    expect(await helper.getStageDeadline(interfold, '7', E3Stage.CommitteeFinalized, network)).to.equal(10)
+    expect(await helper.getStageDeadline(interfold, '7', E3Stage.KeyPublished, network)).to.equal(20)
+    expect(await helper.getStageDeadline(interfold, '7', E3Stage.CiphertextReady, network)).to.equal(30)
+    expect(calls).to.deep.equal(Array(3).fill({ address: interfold, method: 'getDeadlines', args: ['7'] }))
+  })
+
+  it('should not read a deadline for the stages that are not failed on one of the round', async () => {
+    const helper = load({})
+
+    for (const stage of [E3Stage.Requested, E3Stage.Complete, E3Stage.Failed]) {
+      expect(await helper.getStageDeadline(interfold, '7', stage, network)).to.equal(undefined)
+    }
+    expect(calls).to.deep.equal([])
+  })
+
+  it('should leave out a deadline the coordinator has not set', async () => {
+    const helper = load({ getDeadlines: { dkgDeadline: 10n, computeDeadline: 20n, decryptionDeadline: 0n } })
+
+    expect(await helper.getStageDeadline(interfold, '7', E3Stage.CiphertextReady, network)).to.equal(undefined)
   })
 
   it('should read the divisor from the program the coordinator holds for the round', async () => {
