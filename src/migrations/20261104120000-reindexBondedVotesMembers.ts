@@ -38,15 +38,27 @@ export const reindexBondedVotesMembersMigration: IMigration = {
     try {
       const tokens: Token[] = await Models.Token.find({ type: ITokenType.bondedVotes })
 
+      let reindexed = 0
       for (const token of tokens) {
-        await reindexBondedVotesToken(token)
-        logger.verbose(
-          'Reindexed BondedVotes token',
-          llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network }),
-        )
+        try {
+          await reindexBondedVotesToken(token)
+          reindexed++
+          logger.verbose(
+            'Reindexed BondedVotes token',
+            llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network }),
+          )
+        } catch (error) {
+          logger.error(
+            'Cannot reindex BondedVotes token, skipping',
+            llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network, error }),
+          )
+        }
       }
 
-      logger.info('Migration completed successfully', llo({ migration: MIGRATION, reindexed: tokens.length }))
+      logger.info(
+        'Migration completed successfully',
+        llo({ migration: MIGRATION, reindexed, skipped: tokens.length - reindexed }),
+      )
     } catch (error) {
       logger.error('Migration failed', llo({ migration: MIGRATION, error }))
       throw error

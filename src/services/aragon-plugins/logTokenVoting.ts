@@ -14,6 +14,7 @@ import {
   IExitQueueLogs,
   IGovernanceErc20Logs,
   type IIndexerConfig,
+  type IIndexerConfigHandler,
   IPluginInterfaceType,
   ITokenType,
   ITokenVotingLogs,
@@ -138,32 +139,31 @@ export const LogTokenVoting = {
       token.address,
       plugin.network,
     )
-    // voting power also moves with the wrapped votes source: delegation on an ERC20Votes token or an escrow
-    // adapter, and locks on the escrow behind it
-    const votesSourceLogs: string[] = [
-      IGovernanceErc20Logs.DelegateVotesChanged,
-      IVotingEscrowAdapterLogs.DelegateChanged,
-      IVotingEscrowIncreasingLogs.Deposit,
-      IVotingEscrowIncreasingLogs.Withdraw,
-    ]
+    // Handlers bound to this token, so the crawl never refreshes a token that merely reports the same sources. Voting
+    // power also moves with the wrapped votes source: delegation on an ERC20Votes token or an escrow adapter, and locks
+    // on the escrow behind it.
+    const handlers = GovernanceBondedVotesHandler.forToken(token.address)
+    const refreshVotingPower = {
+      handler: handlers.votingPowerChanged,
+      batchHandler: handlers.votingPowerChangedBatch,
+    }
+    const handlerByEvent: Record<string, Pick<IIndexerConfigHandler, 'handler' | 'batchHandler'>> = {
+      [IBondedVotesLogs.BondedDelegateChanged]: {
+        handler: handlers.bondedDelegateChanged,
+        batchHandler: handlers.bondedDelegateChangedBatch,
+      },
+      [IBondedVotesLogs.BondedCheckpointed]: refreshVotingPower,
+      [IGovernanceErc20Logs.DelegateVotesChanged]: refreshVotingPower,
+      [IVotingEscrowAdapterLogs.DelegateChanged]: refreshVotingPower,
+      [IVotingEscrowIncreasingLogs.Deposit]: refreshVotingPower,
+      [IVotingEscrowIncreasingLogs.Withdraw]: refreshVotingPower,
+    }
     const events = configIndexer
-      .filter(
-        (item: IIndexerConfig) =>
-          Object.values(IBondedVotesLogs).includes(item.event as IBondedVotesLogs) ||
-          votesSourceLogs.includes(item.event),
-      )
-      .map((item: IIndexerConfig) =>
-        votesSourceLogs.includes(item.event)
-          ? {
-              ...item,
-              config: item.config.map(cfg => ({
-                ...cfg,
-                handler: GovernanceBondedVotesHandler.votingPowerChanged,
-                batchHandler: GovernanceBondedVotesHandler.votingPowerChangedBatch,
-              })),
-            }
-          : item,
-      )
+      .filter((item: IIndexerConfig) => item.event in handlerByEvent)
+      .map((item: IIndexerConfig) => ({
+        ...item,
+        config: item.config.map(cfg => ({ ...cfg, ...handlerByEvent[item.event] })),
+      }))
 
     return new BlockchainLogCrawler({
       onlyHistorical: isHistorical,
@@ -185,10 +185,18 @@ export const LogTokenVoting = {
       llo({ pluginAddress: plugin.address, tokenAddress: token.address }),
     )
 
-    const crawlers = [
-      LogTokenVoting.buildPluginCrawler(plugin, isHistorical),
-      await LogTokenVoting.buildBondedVotesCrawler(plugin, token, isHistorical),
-    ]
+    const crawlers = [LogTokenVoting.buildPluginCrawler(plugin, isHistorical)]
+
+    // A token that cannot be crawled (reverting sources, no code, archive RPC down) must not fail the plugin sync, or
+    // its queue message would never be settled.
+    try {
+      crawlers.push(await LogTokenVoting.buildBondedVotesCrawler(plugin, token, isHistorical))
+    } catch (error) {
+      logger.error(
+        'LogTokenVoting: cannot build the bonded votes crawler, skipping it',
+        llo({ pluginAddress: plugin.address, tokenAddress: token.address, error }),
+      )
+    }
 
     await Promise.all(crawlers.map(async crawler => crawler.crawl()))
     await Promise.all(crawlers.map(async crawler => crawler.end()))

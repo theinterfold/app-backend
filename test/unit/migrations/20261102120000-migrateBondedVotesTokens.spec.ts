@@ -67,6 +67,23 @@ describe('migration: migrateBondedVotesTokens', () => {
     })
   })
 
+  describe('findBondedVotesTokens', () => {
+    it('should skip a token that cannot be probed and keep looking at the others', async () => {
+      const unprobeable = '0x5555555555555555555555555555555555555555'
+      await createToken(unprobeable)
+      await createToken(bondedAddress)
+      sandbox.stub(logger, 'error')
+      ;(TokenDetector.detectTokenType as SinonStub).callsFake(async (address: string) => {
+        if (address === unprobeable) throw new Error('rpc down')
+        return { type: ITokenType.bondedVotes }
+      })
+
+      const tokens = await findBondedVotesTokens()
+
+      expect(tokens.map(token => token.address)).to.deep.equal([bondedAddress])
+    })
+  })
+
   describe('migrateBondedVotesToken', () => {
     it('should re-type the token, drop the escrow indexing and requeue the plugin', async () => {
       const token = await createToken(bondedAddress)
@@ -92,7 +109,7 @@ describe('migration: migrateBondedVotesTokens', () => {
       expect(await Models.Lock.find({ tokenAddress: bondedAddress, network })).to.have.lengthOf(0)
       expect(sendMessageStub.calledOnceWith(EnumQueueName.plugins)).to.be.true
       expect(sendMessageStub.firstCall.args[1]).to.deep.equal({
-        id: pluginAddress,
+        id: `${network}-${pluginAddress}`,
         params: { address: pluginAddress, network },
       })
     })
@@ -108,6 +125,34 @@ describe('migration: migrateBondedVotesTokens', () => {
   })
 
   describe('start', () => {
+    it('should skip a token that cannot be migrated and still migrate the others', async () => {
+      const failing = '0x5555555555555555555555555555555555555555'
+      const failingPlugin = '0x6666666666666666666666666666666666666666'
+      await createToken(failing)
+      await createToken(bondedAddress)
+      await Models.Plugin.create({
+        address: failingPlugin,
+        daoAddress,
+        network,
+        interfaceType: IPluginInterfaceType.crisp,
+        status: IPluginStatus.installed,
+        tokenAddress: failing,
+        blockNumber: 1000,
+        transactionHash: '0xinstall-failing',
+      })
+      await createPlugin()
+      ;(TokenDetector.detectTokenType as SinonStub).resolves({ type: ITokenType.bondedVotes })
+      const errorStub = sandbox.stub(logger, 'error')
+      sendMessageStub.callsFake(async (_queue: string, message: any) => {
+        if (message.params.address === failingPlugin) throw new Error('queue down')
+      })
+
+      await migrateBondedVotesTokensMigration.start()
+
+      expect(sendMessageStub.calledWithMatch(EnumQueueName.plugins, { params: { address: pluginAddress } })).to.be.true
+      expect(errorStub.calledWith('Migration failed' as any)).to.be.false
+    })
+
     it('should migrate every BondedVotes token and leave other adapters alone', async () => {
       await createToken(bondedAddress)
       await createToken(adapterAddress)

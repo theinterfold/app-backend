@@ -22,23 +22,26 @@ export interface IBondedVotesSources {
 
 // All immutable in BondedVotes, so they are read once per token.
 const sourcesCache = new Map<string, IBondedVotesSources>()
+// A token that cannot report its sources (not a BondedVotes, or reverting) is not read again for a while.
+const SOURCES_FAILURE_TTL_MS = 60_000
+const sourcesFailures = new Map<string, { error: unknown; until: number }>()
 const startBlockCache = new Map<string, number>()
+
+const schedule = async <T>(network: NetworksEnum, call: () => Promise<T>): Promise<T> =>
+  retryRequest(async () => BottleneckModule.getNodeLimiter(network).schedule(call))
 
 const read = async (token: HexAddress, network: NetworksEnum, method: string, ...args: string[]): Promise<any> => {
   const contract = new Contract(token, abi, ProviderModule.getAnyRpcProvider(network))
-  return retryRequest(async () =>
-    BottleneckModule.getNodeLimiter(network).schedule(async () => contract[method](...args)),
-  )
+  return schedule(network, async () => contract[method](...args))
 }
 
 // Smallest block at which `address` has code. Needs an archive node, like any historical crawl.
 const getCreationBlock = async (address: HexAddress, network: NetworksEnum): Promise<number> => {
   const provider = ProviderModule.getAnyRpcProvider(network)
-  const schedule = async <T>(call: () => Promise<T>): Promise<T> =>
-    retryRequest(async () => BottleneckModule.getNodeLimiter(network).schedule(call))
-  const hasCode = async (block: number) => (await schedule(async () => provider.getCode(address, block))) !== '0x'
+  const hasCode = async (block: number) =>
+    (await schedule(network, async () => provider.getCode(address, block))) !== '0x'
 
-  let high = await schedule(async () => provider.getBlockNumber())
+  let high = await schedule(network, async () => provider.getBlockNumber())
   if (!(await hasCode(high))) throw new Error(`No contract code at ${address}`)
 
   let low = 0
@@ -57,14 +60,22 @@ const GovernanceBondedVotesHelper = {
     const cached = sourcesCache.get(key)
     if (cached) return cached
 
-    const [checkpoints, votesSource, escrow] = await Promise.all([
-      read(token, network, 'checkpoints'),
-      read(token, network, 'votesSource'),
-      read(token, network, 'escrow'),
-    ])
-    const sources = { checkpoints, votesSource, escrow: escrow === utils.zeroAddress ? null : escrow }
-    sourcesCache.set(key, sources)
-    return sources
+    const failure = sourcesFailures.get(key)
+    if (failure && failure.until > Date.now()) throw failure.error
+
+    try {
+      const [checkpoints, votesSource, escrow] = await Promise.all([
+        read(token, network, 'checkpoints'),
+        read(token, network, 'votesSource'),
+        read(token, network, 'escrow'),
+      ])
+      const sources = { checkpoints, votesSource, escrow: escrow === utils.zeroAddress ? null : escrow }
+      sourcesCache.set(key, sources)
+      return sources
+    } catch (error) {
+      sourcesFailures.set(key, { error, until: Date.now() + SOURCES_FAILURE_TTL_MS })
+      throw error
+    }
   },
 
   // First block of the history behind the token's voting power. The votes source and its escrow are

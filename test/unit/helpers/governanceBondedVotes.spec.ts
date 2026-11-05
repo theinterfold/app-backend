@@ -50,6 +50,52 @@ describe('Helpers: GovernanceBondedVotes', () => {
       expect(sources).to.deep.equal({ checkpoints, votesSource, escrow })
     })
 
+    describe('a token that cannot report its sources', () => {
+      const loadReverting = () => {
+        const reads = sandbox.stub().rejects(new Error('execution reverted'))
+        const { default: Helper } = proxyquire.noCallThru()('@helpers/governanceBondedVotes', {
+          ethers: {
+            Contract: function () {
+              return new Proxy({}, { get: () => reads })
+            },
+          },
+        })
+        return { Helper: Helper as typeof GovernanceBondedVotesHelper, reads }
+      }
+      const rejection = async (call: Promise<unknown>) => {
+        try {
+          await call
+        } catch (error) {
+          return (error as Error).message
+        }
+        return undefined
+      }
+
+      it('should not be read again on every call', async () => {
+        const { Helper, reads } = loadReverting()
+        const attacker = '0x4747474747474747474747474747474747474747'
+
+        expect(await rejection(Helper.getSources(attacker, network))).to.equal('execution reverted')
+        const readsAfterFirst = reads.callCount
+        expect(await rejection(Helper.getSources(attacker, network))).to.equal('execution reverted')
+
+        expect(reads.callCount).to.equal(readsAfterFirst)
+      })
+
+      it('should be read again once the failure has expired', async () => {
+        const { Helper, reads } = loadReverting()
+        const attacker = '0x4848484848484848484848484848484848484848'
+        const now = Date.now()
+
+        await rejection(Helper.getSources(attacker, network))
+        const readsAfterFirst = reads.callCount
+        sandbox.stub(Date, 'now').returns(now + 10 * 60_000)
+        await rejection(Helper.getSources(attacker, network))
+
+        expect(reads.callCount).to.be.greaterThan(readsAfterFirst)
+      })
+    })
+
     it('should report no escrow when the token votes for itself', async () => {
       const sources = await load(zero).getSources('0x4242424242424242424242424242424242424242', network)
 

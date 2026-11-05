@@ -1827,7 +1827,6 @@ describe('Indexer: PluginSettingHandler', () => {
           },
         ],
       })
-      const lookup = sandbox.spy(Models.Plugin, 'findByAddress')
 
       await PluginSettingHandler.pairSppPlugins(parent, settings, { network, blockNumber: 1 } as ILogInfo)
 
@@ -1840,13 +1839,56 @@ describe('Indexer: PluginSettingHandler', () => {
         isProcess: true,
       })
       expect(await Models.Plugin.findByEntityId(parent.id)).to.include({ totalStages: 1 })
-      expect(lookup.calledOnceWithExactly(ordinary.address, network)).to.be.true
+    })
+
+    it('does not claim a plugin of another DAO listed as a stage body', async () => {
+      sandbox.stub(logger, 'verbose')
+      sandbox.stub(logger, 'warn')
+      const network = NetworksEnum.ethereumMainnet
+      const createRow = (address: string, daoAddress: string, interfaceType: IPluginInterfaceType) =>
+        Models.Plugin.create({
+          address,
+          daoAddress,
+          network,
+          interfaceType,
+          transactionHash: address,
+          blockNumber: 1,
+          status: IPluginStatus.installed,
+          isSupported: true,
+        })
+      const parent = await createRow(
+        '0x2222222222222222222222222222222222222222',
+        '0x1111111111111111111111111111111111111111',
+        IPluginInterfaceType.spp,
+      )
+      const foreign = await createRow(
+        '0x3333333333333333333333333333333333333333',
+        '0x5555555555555555555555555555555555555555',
+        IPluginInterfaceType.tokenVoting,
+      )
+      const settings = await Models.Setting.create({
+        network,
+        daoAddress: parent.daoAddress,
+        pluginAddress: parent.address,
+        transactionHash: 'stage-setting',
+        blockNumber: 1,
+        status: ISettingStatus.active,
+        stages: [{ stageIndex: 0, plugins: [{ address: foreign.address, brandId: VotingBodyBrandIdentity.OTHER }] }],
+      })
+
+      await PluginSettingHandler.pairSppPlugins(parent, settings, { network, blockNumber: 1 } as ILogInfo)
+
+      const after = await Models.Plugin.findByEntityId(foreign.id)
+      expect(after.isSubPlugin).to.not.equal(true)
+      expect(after.parentPlugin).to.not.exist
+      expect(after.isProcess).to.not.equal(true)
     })
 
     it('should update the main plugin and its sub-plugins', async () => {
       const plugin = {
         id: 'plugin-id',
         address: '0xmain-plugin',
+        daoAddress: '0xdao',
         parentPlugin: null,
       } as any
 
@@ -1866,7 +1908,7 @@ describe('Indexer: PluginSettingHandler', () => {
       const info = { network: NetworksEnum.ethereumMainnet, blockNumber: 1 } as any
 
       sandbox
-        .stub(Models.Plugin, 'findByAddress')
+        .stub(Models.Plugin, 'findOneByDao')
         .onFirstCall()
         .resolves({ id: 'sub-plugin1', interfaceType: 'spp' })
         .onSecondCall()
@@ -1896,7 +1938,7 @@ describe('Indexer: PluginSettingHandler', () => {
 
       const info = { network: NetworksEnum.ethereumMainnet } as any
 
-      sandbox.stub(Models.Plugin, 'findByAddress').resolves(null)
+      sandbox.stub(Models.Plugin, 'findOneByDao').resolves(null)
       const loggerStub = sandbox.stub(logger, 'warn')
       const updateDocumentStub = sandbox.stub(DbOperations, 'updateDocument')
 

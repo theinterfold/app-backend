@@ -5,17 +5,19 @@ import utils from '@helpers/utils'
 import Web3Utils from '@helpers/web3Utils'
 import logger from '@logger'
 import { Erc20Governance } from '@src/governance/erc20Governance'
-import { type HexAddress, type ILogInfo, ITokenType, type NetworksEnum } from '@types'
+import { type HexAddress, type ILogInfo, IPluginStatus, ITokenType, type NetworksEnum } from '@types'
 import { type LogDescription } from 'ethers'
 
 const llo = logger.logMeta.bind(null, { service: 'handlers:GovernanceBondedVotesHandler' })
 
 type IEvent = { parsedEvent: LogDescription; info: ILogInfo }
 
-// BondedVotes emits no DelegateVotesChanged: its voting power moves with bonds and bonded
-// delegation, plus the votes source it wraps (an ERC20Votes token, or an escrow adapter and the
-// escrow behind it).
-// Events name the accounts that changed; the new power is read from the contract.
+// BondedVotes emits no DelegateVotesChanged: its voting power moves with bonds, bonded delegation and the votes source
+// it wraps (an ERC20Votes token, or an escrow adapter and its escrow). Events name the affected accounts; the new
+// power is read from the contract.
+//
+// Known gap: with an escrow votes source, the power also includes FOLD vesting locks, and changes to those emit no
+// event any crawler watches. Holders whose power comes only from vesting may be missing from the member list, or stale.
 const affectedAccounts = ({ parsedEvent: { name, args } }: IEvent): string[] => {
   switch (name) {
     case 'BondedDelegateChanged':
@@ -34,18 +36,44 @@ const affectedAccounts = ({ parsedEvent: { name, args } }: IEvent): string[] => 
   }
 }
 
-// BondedVotes tokens that read voting power from the contract emitting the event.
+// Installed, supported BondedVotes tokens that read voting power from the contract emitting the event. Anyone can
+// deploy a token that reports another token's sources, so only tokens a DAO runs a plugin on are considered, and a
+// token whose sources cannot be read is skipped instead of failing the batch.
 const findTokens = async (emitter: string, network: NetworksEnum): Promise<HexAddress[]> => {
-  const tokens = await Models.Token.find({ network, type: ITokenType.bondedVotes })
-  const sources = await Promise.all(tokens.map(token => GovernanceBondedVotesHelper.getSources(token.address, network)))
+  const candidates = await Models.Token.find({ network, type: ITokenType.bondedVotes })
+  const used = new Set(
+    await Models.Plugin.distinct('tokenAddress', {
+      network,
+      tokenAddress: { $in: candidates.map(token => token.address) },
+      status: IPluginStatus.installed,
+      isSupported: true,
+    }),
+  )
 
-  return tokens
-    .filter((token, i) =>
-      [token.address, sources[i].checkpoints, sources[i].votesSource, sources[i].escrow].some(
-        address => address?.toLowerCase() === emitter.toLowerCase(),
-      ),
-    )
-    .map(token => token.address)
+  const matches = await Promise.all(
+    candidates
+      .filter(token => used.has(token.address))
+      .map(async token => {
+        try {
+          const { checkpoints, votesSource, escrow } = await GovernanceBondedVotesHelper.getSources(
+            token.address,
+            network,
+          )
+          const feeds = [token.address, checkpoints, votesSource, escrow].some(
+            address => address?.toLowerCase() === emitter.toLowerCase(),
+          )
+          return feeds ? token.address : null
+        } catch (error) {
+          logger.warn(
+            'Cannot read the sources of a BondedVotes token, skipping it',
+            llo({ token: token.address, error }),
+          )
+          return null
+        }
+      }),
+  )
+
+  return matches.filter((address): address is HexAddress => !!address)
 }
 
 const refreshToken = async (token: HexAddress, network: NetworksEnum, events: IEvent[]) => {
@@ -54,27 +82,25 @@ const refreshToken = async (token: HexAddress, network: NetworksEnum, events: IE
   if (plugins.length === 0) return
 
   // account -> latest block that touched it
-  const accounts = new Map<HexAddress, number>()
-  const touch = (address: string, blockNumber: number) => {
+  const touch = (accounts: Map<HexAddress, number>, address: string, blockNumber: number) => {
     const account = Web3Utils.parseAddress(address as HexAddress)
     if (!account || account === utils.zeroAddress) return
     accounts.set(account, Math.max(accounts.get(account) ?? 0, blockNumber))
   }
 
-  for (const event of events) {
-    const { blockNumber } = event.info
-    affectedAccounts(event).forEach(address => touch(address, blockNumber))
-
-    // an owner's bond counts at its bonded delegate while it delegates
-    if (event.parsedEvent.name === 'BondedCheckpointed') {
-      const delegate = await GovernanceBondedVotesHelper.getBondedDelegate(
-        token,
-        network,
-        event.parsedEvent.args.bondOwner,
-      )
-      touch(delegate, blockNumber)
-    }
+  const accounts = new Map<HexAddress, number>()
+  const bondOwners = new Map<HexAddress, number>()
+  for (const { parsedEvent, info } of events) {
+    affectedAccounts({ parsedEvent, info }).forEach(address => touch(accounts, address, info.blockNumber))
+    if (parsedEvent.name === 'BondedCheckpointed') touch(bondOwners, parsedEvent.args.bondOwner, info.blockNumber)
   }
+
+  // an owner's bond counts at its bonded delegate while it delegates
+  const owners = [...bondOwners]
+  const delegates = await Promise.all(
+    owners.map(async ([owner]) => GovernanceBondedVotesHelper.getBondedDelegate(token, network, owner)),
+  )
+  owners.forEach(([, blockNumber], i) => touch(accounts, delegates[i], blockNumber))
 
   const entries = [...accounts]
   const votes = await Promise.all(
@@ -103,34 +129,39 @@ const refreshToken = async (token: HexAddress, network: NetworksEnum, events: IE
   await governance.updateDaoMetrics()
 }
 
-export const GovernanceBondedVotesHandler = {
-  // Re-reads the voting power of every account the events touch, for each BondedVotes token the
-  // emitting contract feeds.
-  votingPowerChangedBatch: async (events: IEvent[]) => {
-    try {
-      const byEmitter = new Map<string, IEvent[]>()
-      for (const event of events) {
-        const key = `${event.info.network}-${event.info.address}`
-        byEmitter.set(key, [...(byEmitter.get(key) ?? []), event])
-      }
+// Resolves the tokens the emitter feeds, for events that do not come from a crawl bound to one token. A failing token
+// is logged and skipped, so it cannot block the others.
+const refreshByEmitter = async (events: IEvent[]) => {
+  const byEmitter = new Map<string, IEvent[]>()
+  for (const event of events) {
+    const key = `${event.info.network}-${event.info.address}`
+    byEmitter.set(key, [...(byEmitter.get(key) ?? []), event])
+  }
 
-      for (const group of byEmitter.values()) {
-        const { address, network } = group[0].info
-        for (const token of await findTokens(address, network)) {
-          await refreshToken(token, network, group)
-        }
+  for (const group of byEmitter.values()) {
+    const { address, network } = group[0].info
+    const tokens = await findTokens(address, network)
+    const results = await Promise.allSettled(tokens.map(async token => refreshToken(token, network, group)))
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        logger.error('VotingPowerChanged - error', llo({ error: result.reason, token: tokens[i], emitter: address }))
       }
+    })
+  }
+}
+
+const createHandlers = (refresh: (events: IEvent[]) => Promise<void>) => {
+  const votingPowerChangedBatch = async (events: IEvent[]) => {
+    try {
+      await refresh(events)
     } catch (error) {
       logger.error('VotingPowerChanged - error', llo({ error, eventCount: events.length }))
       throw error
     }
-  },
+  }
 
-  votingPowerChanged: async (parsedEvent: LogDescription, info: ILogInfo) =>
-    GovernanceBondedVotesHandler.votingPowerChangedBatch([{ parsedEvent, info }]),
-
-  bondedDelegateChangedBatch: async (events: IEvent[]) => {
-    // same shape as the ERC20 DelegateChanged log, so delegators and delegations are served as for ERC20 tokens
+  const bondedDelegateChangedBatch = async (events: IEvent[]) => {
+    // reshaped as an ERC20 DelegateChanged log so delegations are served as for ERC20 tokens
     await GovernanceErc20Handler.delegateChangedBatch(
       events.map(({ parsedEvent, info }) => ({
         info,
@@ -143,9 +174,27 @@ export const GovernanceBondedVotesHandler = {
         } as unknown as LogDescription,
       })),
     )
-    await GovernanceBondedVotesHandler.votingPowerChangedBatch(events)
-  },
+    await votingPowerChangedBatch(events)
+  }
 
-  bondedDelegateChanged: async (parsedEvent: LogDescription, info: ILogInfo) =>
-    GovernanceBondedVotesHandler.bondedDelegateChangedBatch([{ parsedEvent, info }]),
+  return {
+    // Re-reads the voting power of every account the events touch.
+    votingPowerChangedBatch,
+    votingPowerChanged: async (parsedEvent: LogDescription, info: ILogInfo) =>
+      votingPowerChangedBatch([{ parsedEvent, info }]),
+    bondedDelegateChangedBatch,
+    bondedDelegateChanged: async (parsedEvent: LogDescription, info: ILogInfo) =>
+      bondedDelegateChangedBatch([{ parsedEvent, info }]),
+  }
+}
+
+export const GovernanceBondedVotesHandler = {
+  // For every installed BondedVotes token the emitting contract feeds.
+  ...createHandlers(refreshByEmitter),
+
+  // Handlers for the crawl of one token: its events are never matched against other tokens' sources.
+  forToken: (token: HexAddress) =>
+    createHandlers(async events => {
+      if (events.length > 0) await refreshToken(token, events[0].info.network, events)
+    }),
 }

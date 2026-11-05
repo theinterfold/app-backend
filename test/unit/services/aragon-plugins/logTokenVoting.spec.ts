@@ -927,16 +927,17 @@ describe('AragonPlugins: LogTokenVoting', () => {
       expect(startBlock).to.be.lessThan(plugin.blockNumber)
     })
 
-    it('should refresh voting power on votes source delegation instead of the ERC20 / escrow handlers', async () => {
+    it('should refresh voting power through handlers bound to the token, never the global ones', async () => {
       const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
       const { events } = (crawler as any).crawlParams
+      const globalHandlers = Object.values(GovernanceBondedVotesHandler).filter(h => typeof h === 'function')
 
       for (const event of events) {
-        const expected =
-          event.event === IBondedVotesLogs.BondedDelegateChanged
-            ? GovernanceBondedVotesHandler.bondedDelegateChanged
-            : GovernanceBondedVotesHandler.votingPowerChanged
-        event.config.forEach((cfg: any) => expect(cfg.handler).to.equal(expected))
+        event.config.forEach((cfg: any) => {
+          expect(globalHandlers).to.not.include(cfg.handler)
+          expect(globalHandlers).to.not.include(cfg.batchHandler)
+          expect(cfg.handler).to.be.a('function')
+        })
       }
     })
 
@@ -950,6 +951,32 @@ describe('AragonPlugins: LogTokenVoting', () => {
       const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
 
       expect((crawler as any).crawlParams.address).to.deep.equal([token.address, '0xCheckpoints'])
+    })
+
+    it('should still sync the plugin when the bonded crawler cannot be built', async () => {
+      ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).rejects(new Error('execution reverted'))
+      const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+      const endStub = sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+      sandbox.stub(logger, 'verbose')
+      const errorStub = sandbox.stub(logger, 'error')
+
+      await LogTokenVoting.start(plugin, token)
+
+      expect(crawlStub.calledOnce).to.be.true
+      expect(endStub.calledOnce).to.be.true
+      expect(errorStub.calledOnce).to.be.true
+    })
+
+    it('should still sync the plugin when the first block of the contracts cannot be found', async () => {
+      ;(GovernanceBondedVotesHelper.getStartBlock as sinon.SinonStub).rejects(new Error('No contract code'))
+      const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+      sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+      sandbox.stub(logger, 'verbose')
+      sandbox.stub(logger, 'error')
+
+      await LogTokenVoting.start(plugin, token)
+
+      expect(crawlStub.calledOnce).to.be.true
     })
 
     it('should crawl the plugin and the token', async () => {

@@ -82,6 +82,25 @@ describe('migration: reindexBondedVotesMembers', () => {
   })
 
   describe('start', () => {
+    it('should skip a token that cannot be reindexed and still reindex the others', async () => {
+      const failing = '0x5555555555555555555555555555555555555555'
+      await createToken(failing)
+      await createToken(bondedAddress)
+      await createCrawl(failing)
+      await createCrawl(bondedAddress)
+      const errorStub = sandbox.stub(logger, 'error')
+      const deleteOne = Models.ConfigIndexer.deleteOne.bind(Models.ConfigIndexer)
+      sandbox.stub(Models.ConfigIndexer, 'deleteOne').callsFake((filter: any) => {
+        if (filter.service === crawlService(failing)) return Promise.reject(new Error('write failed'))
+        return deleteOne(filter)
+      })
+
+      await reindexBondedVotesMembersMigration.start()
+
+      expect(await Models.ConfigIndexer.findOne({ network, service: crawlService(bondedAddress) })).to.equal(null)
+      expect(errorStub.calledWith('Migration failed' as any)).to.be.false
+    })
+
     it('should reindex every BondedVotes token and leave other tokens alone', async () => {
       await createToken(bondedAddress)
       await createToken(erc20Address, ITokenType.ERC20)
