@@ -12,6 +12,7 @@ import { SinonSandbox, SinonStub } from 'sinon'
 describe('AragonPlugins: CrispRoundSweep', () => {
   let sandbox: SinonSandbox
   let stageStub: SinonStub
+  let deadlineStub: SinonStub
   let checkStub: SinonStub
   let failureReasonStub: SinonStub
   let syncTallyStub: SinonStub
@@ -58,6 +59,7 @@ describe('AragonPlugins: CrispRoundSweep', () => {
     sandbox.stub(logger, 'verbose')
     sandbox.stub(logger, 'error')
     stageStub = sandbox.stub(CrispHelper, 'getE3Stage').resolves(E3Stage.KeyPublished)
+    deadlineStub = sandbox.stub(CrispHelper, 'getStageDeadline').resolves(undefined)
     checkStub = sandbox.stub(CrispHelper, 'checkFailureCondition').resolves({ canFail: false, reason: 0 })
     failureReasonStub = sandbox.stub(CrispHelper, 'getFailureReason').resolves(6)
     syncTallyStub = sandbox.stub(CrispInterfoldHandler, 'syncTally').resolves()
@@ -86,6 +88,39 @@ describe('AragonPlugins: CrispRoundSweep', () => {
 
     expect(checkStub.calledOnce).to.be.true
     expect(await reasonOf('1')).to.equal(undefined)
+  })
+
+  it('should record the stage of a running round and the deadline it fails on', async () => {
+    await createProposal('1', { e3Stage: E3Stage.KeyPublished, e3StageDeadline: 500 })
+    stageStub.resolves(E3Stage.CiphertextReady)
+    deadlineStub.resolves(900)
+
+    await CrispRoundSweep.start()
+
+    expect(deadlineStub.calledOnceWith(coordinator, '101', E3Stage.CiphertextReady, network)).to.be.true
+    const proposal = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
+    expect(proposal.e3Stage).to.equal(E3Stage.CiphertextReady)
+    expect(proposal.e3StageDeadline).to.equal(900)
+  })
+
+  it('should drop the deadline of the previous stage when the new one has none', async () => {
+    await createProposal('1', { e3Stage: E3Stage.None, e3StageDeadline: 500 })
+    stageStub.resolves(E3Stage.Requested)
+
+    await CrispRoundSweep.start()
+
+    const proposal = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
+    expect(proposal.e3Stage).to.equal(E3Stage.Requested)
+    expect(proposal.e3StageDeadline).to.equal(undefined)
+  })
+
+  it('should not read the deadline again while the round stays in its stage', async () => {
+    await createProposal('1', { e3Stage: E3Stage.KeyPublished, e3StageDeadline: 500 })
+
+    await CrispRoundSweep.start()
+
+    expect(deadlineStub.called).to.be.false
+    expect((await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })).e3StageDeadline).to.equal(500)
   })
 
   it('should store the reason the coordinator recorded for a failed round', async () => {

@@ -32,6 +32,12 @@ export enum E3Stage {
   Failed,
 }
 
+const stageDeadlineField: Partial<Record<E3Stage, 'dkgDeadline' | 'computeDeadline' | 'decryptionDeadline'>> = {
+  [E3Stage.CommitteeFinalized]: 'dkgDeadline',
+  [E3Stage.KeyPublished]: 'computeDeadline',
+  [E3Stage.CiphertextReady]: 'decryptionDeadline',
+}
+
 const CrispHelper = {
   // The Interfold coordinator the plugin's rounds run on, checksummed
   async getInterfold(plugin: HexAddress, network: NetworksEnum): Promise<HexAddress> {
@@ -63,6 +69,22 @@ const CrispHelper = {
   // The `FailureReason` the coordinator stored when the round was marked failed
   async getFailureReason(interfold: HexAddress, e3Id: string, network: NetworksEnum): Promise<number> {
     return Number(await read(interfold, Interfold.abi, network, 'getFailureReason', e3Id))
+  },
+
+  // The deadline after which the round can be marked failed in `stage`, as `InterfoldLifecycle.failureCondition`
+  // picks it, in seconds. Undefined for a `Requested` round, whose deadline the round's ciphernode registry holds,
+  // and for the stages without one.
+  async getStageDeadline(
+    interfold: HexAddress,
+    e3Id: string,
+    stage: E3Stage,
+    network: NetworksEnum,
+  ): Promise<number | undefined> {
+    const field = stageDeadlineField[stage]
+    if (!field) return undefined
+    const deadlines = await read(interfold, Interfold.abi, network, 'getDeadlines', e3Id)
+    const deadline = Number(deadlines[field])
+    return deadline > 0 ? deadline : undefined
   },
 
   // `getE3(e3Id).e3Program` is the CRISP program that set the divisor when the round was requested

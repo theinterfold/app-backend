@@ -14,8 +14,9 @@ const llo = logger.logMeta.bind(null, { service: 'service:indexer:CrispRoundSwee
  * And a coordinator crawl that runs ahead of a plugin's own crawl meets the round events before the proposal exists,
  * so it skips them. Each run asks the coordinator about the round of every unsettled proposal (not executed, tally
  * not published, no failure reason): a complete round gets its tally, a failed one the reason the coordinator stored,
- * and one that missed a deadline the reason `checkFailureCondition` reports. A read that fails is logged and skipped,
- * the proposal is asked again on the next run.
+ * and one that missed a deadline the reason `checkFailureCondition` reports. A round still running records its stage
+ * and the deadline it fails on in that stage, so a stalled committee or computation shows until when it may run. A
+ * read that fails is logged and skipped, the proposal is asked again on the next run.
  */
 export const CrispRoundSweep = {
   start: async (): Promise<void> => {
@@ -46,6 +47,17 @@ export const CrispRoundSweep = {
         if (stage === E3Stage.Complete) {
           await CrispInterfoldHandler.syncTally(proposal, plugin)
           continue
+        }
+
+        // A stage's deadline is set when the round enters it, so it is read once per stage
+        if (stage !== E3Stage.Failed && stage !== proposal.e3Stage) {
+          const deadline = await CrispHelper.getStageDeadline(interfold, e3Id, stage, network)
+          await Models.Proposal.updateOne(
+            { _id },
+            deadline === undefined
+              ? { $set: { e3Stage: stage }, $unset: { e3StageDeadline: 1 } }
+              : { $set: { e3Stage: stage, e3StageDeadline: deadline } },
+          )
         }
 
         let reason: number | undefined

@@ -48,6 +48,24 @@ export const Interfold = {
     },
     {
       inputs: [{ internalType: 'uint256', name: 'e3Id', type: 'uint256' }],
+      name: 'getDeadlines',
+      outputs: [
+        {
+          components: [
+            { internalType: 'uint256', name: 'dkgDeadline', type: 'uint256' },
+            { internalType: 'uint256', name: 'computeDeadline', type: 'uint256' },
+            { internalType: 'uint256', name: 'decryptionDeadline', type: 'uint256' },
+          ],
+          internalType: 'struct IInterfold.E3Deadlines',
+          name: 'deadlines',
+          type: 'tuple',
+        },
+      ],
+      stateMutability: 'view',
+      type: 'function',
+    },
+    {
+      inputs: [{ internalType: 'uint256', name: 'e3Id', type: 'uint256' }],
       name: 'getE3',
       outputs: [
         {
