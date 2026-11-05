@@ -4,6 +4,7 @@ import { Models } from '@dbModels'
 import { DaoRegistryHandler } from '@handlers/daoRegistryHandler'
 import { PluginSettingHandler } from '@handlers/pluginSettingHandler'
 import { ProposalHandler } from '@handlers/proposalHandler'
+import CrispHelper from '@helpers/crisp'
 import DecodeActions from '@helpers/decodeAction'
 import EnsHelper from '@helpers/ens'
 import GovernanceErc20Helper from '@helpers/governanceErc20'
@@ -26,6 +27,7 @@ import {
   IClockMode,
   ILogInfo,
   IPluginInterfaceType,
+  IPluginStatus,
   IProposalMetadata,
   IReportResultType,
   ITelegramNotificationEvent,
@@ -739,9 +741,12 @@ describe('ProposalHandler', () => {
         tokenAddress: '0xtoken-address',
       }
 
-      const stubCommon = () => {
-        sandbox.stub(Models.Plugin, 'findByAddress').resolves(plugin as any)
-        sandbox.stub(Models.Plugin, 'findOne').resolves(plugin as any)
+      let getProposalCrispStub: sinon.SinonStub
+
+      const stubCommon = (relatedPlugin: any = plugin) => {
+        sandbox.stub(Models.Plugin, 'findByAddress').resolves(relatedPlugin)
+        sandbox.stub(Models.Plugin, 'findOne').resolves(relatedPlugin)
+        getProposalCrispStub = sandbox.stub(ProposalHelper, 'getProposalCrisp').resolves(null)
         sandbox.stub(Models.Proposal, 'findExistingLog').resolves(null)
         sandbox.stub(Web3Utils, 'extractMetadataUri').returns(metadataUri)
         sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1700000000)
@@ -788,6 +793,77 @@ describe('ProposalHandler', () => {
         expect(savedProposal.snapshot.totalSupply).to.eq('1000')
         expect(savedProposal.settings.supportThreshold).to.eq(50)
         expect(savedProposal.settings.minParticipation).to.eq(20)
+      })
+
+      it('should store the round, the frozen parameters and the total voting power at the snapshot', async () => {
+        sandbox.stub(Models.Setting, 'findLastSettingByBlockNumber').resolves({
+          tokenAddress: '0xtoken-address',
+          minParticipation: 20,
+          supportThreshold: 50,
+          minVoterVotingPower: '1',
+        } as any)
+        sandbox.stub(GovernanceErc20Helper, 'getPastTotalSupply').resolves('1000')
+        const crispPlugin = await Models.Plugin.create({
+          ...plugin,
+          network,
+          status: IPluginStatus.installed,
+          blockNumber: 1,
+          transactionHash: '0xinstall',
+          interfoldAddress: '0x3333333333333333333333333333333333333333',
+        } as any)
+        stubCommon(crispPlugin)
+        getProposalCrispStub.resolves({
+          e3Id: 7n,
+          parameters: { snapshotBlock: 90n, minVotingPower: 5n, minParticipation: 25n, supportThreshold: 60n },
+        } as any)
+        const totalVotingPowerStub = sandbox.stub(CrispHelper, 'getTotalVotingPower').resolves('555')
+        const divisorStub = sandbox.stub(CrispHelper, 'getVotingPowerDivisor').resolves('1000000')
+
+        await ProposalHandler.proposalCreated(fakeEvent as any, info)
+
+        const savedProposal = await Models.Proposal.findOne({
+          transactionHash: '0xcrisp-tx',
+          pluginAddress: '0xcrisp-plugin',
+          proposalIndex: '1',
+        })
+
+        expect(totalVotingPowerStub.calledOnceWith('0xcrisp-plugin', network, 90n)).to.be.true
+        expect(divisorStub.calledOnceWith('0x3333333333333333333333333333333333333333', '7', network)).to.be.true
+        expect(savedProposal.e3Id).to.eq('7')
+        expect(savedProposal.isTallyPublished).to.be.false
+        expect(savedProposal.votingPowerDivisor).to.eq('1000000')
+        expect(savedProposal.snapshot.totalSupply).to.eq('555')
+        expect(savedProposal.settings.minParticipation).to.eq(25)
+        expect(savedProposal.settings.supportThreshold).to.eq(60)
+        expect(savedProposal.settings.minVoterVotingPower).to.eq('5')
+        expect(savedProposal.metrics.votesByOption).to.have.length(0)
+      })
+
+      it('should keep the token total supply when the total voting power cannot be read', async () => {
+        sandbox
+          .stub(Models.Setting, 'findLastSettingByBlockNumber')
+          .resolves({ tokenAddress: '0xtoken-address' } as any)
+        sandbox.stub(GovernanceErc20Helper, 'getPastTotalSupply').resolves('1000')
+        stubCommon({ ...plugin, interfoldAddress: '0x3333333333333333333333333333333333333333' })
+        getProposalCrispStub.resolves({
+          e3Id: 7n,
+          parameters: { snapshotBlock: 90n, minVotingPower: 5n, minParticipation: 25n, supportThreshold: 60n },
+        } as any)
+        sandbox.stub(CrispHelper, 'getTotalVotingPower').rejects(new Error('rpc'))
+        sandbox.stub(CrispHelper, 'getVotingPowerDivisor').resolves('1000000')
+        sandbox.stub(logger, 'error')
+
+        await ProposalHandler.proposalCreated(fakeEvent as any, info)
+
+        const savedProposal = await Models.Proposal.findOne({
+          transactionHash: '0xcrisp-tx',
+          pluginAddress: '0xcrisp-plugin',
+          proposalIndex: '1',
+        })
+
+        expect(savedProposal.snapshot.totalSupply).to.eq('1000')
+        expect(savedProposal.e3Id).to.eq('7')
+        expect(savedProposal.votingPowerDivisor).to.eq('1000000')
       })
 
       it('should not queue the token voting metrics job, which would overwrite the tally with zeros', async () => {
@@ -3266,6 +3342,44 @@ describe('ProposalHandler', () => {
       const updatedProposal = await Models.Proposal.findByEntityId(proposal.id)
       expect(updatedProposal.executed.status).to.be.true
       expect(telegramOutboxStub.notCalled).to.be.true
+    })
+
+    it('should read the final tally of an executed CRISP proposal', async () => {
+      const proposal = await Models.Proposal.create({ ...ProposalList[0], e3Id: '7', votingPowerDivisor: '100' } as any)
+      await Models.Plugin.create({
+        address: proposal.pluginAddress,
+        daoAddress: proposal.daoAddress,
+        network: proposal.network,
+        interfaceType: IPluginInterfaceType.crisp,
+        status: IPluginStatus.installed,
+        blockNumber: 1,
+        transactionHash: '0xinstall',
+      } as any)
+      const info: ILogInfo = {
+        transactionHash: '0xExecutedCrispTx',
+        address: proposal.pluginAddress,
+        blockNumber: 20,
+        network: proposal.network,
+        eventName: 'ProposalExecuted',
+        transactionIndex: 1,
+        logIndex: 2,
+      }
+      sandbox.stub(Models.Proposal, 'findByProposalIndex').resolves(proposal as any)
+      sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1800000000)
+      sandbox.stub(RabbitMQHelper, 'sendMessage').resolves()
+      const getTallyStub = sandbox.stub(CrispHelper, 'getTally').resolves([4n, 2n, 1n])
+
+      await ProposalHandler.proposalExecuted({ args: { proposalId: 1n } } as any, info)
+
+      const updatedProposal = await Models.Proposal.findByEntityId(proposal.id)
+      expect(getTallyStub.calledOnceWith(proposal.pluginAddress, proposal.network, proposal.proposalIndex)).to.be.true
+      expect(updatedProposal.executed.status).to.be.true
+      expect(updatedProposal.isTallyPublished).to.be.true
+      expect(updatedProposal.metrics.votesByOption.map(option => option.totalVotingPower)).to.deep.equal([
+        '400',
+        '200',
+        '100',
+      ])
     })
 
     it('should update proposal as executed and send dao metrics', async () => {

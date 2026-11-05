@@ -392,6 +392,11 @@ export enum IVotingEscrowAdapterLogs {
   DelegateChanged = 'DelegateChanged',
 }
 
+export enum IInterfoldLogs {
+  PlaintextOutputPublished = 'PlaintextOutputPublished',
+  E3Failed = 'E3Failed',
+}
+
 export enum IBondedVotesLogs {
   BondedDelegateChanged = 'BondedDelegateChanged',
   BondedCheckpointed = 'BondedCheckpointed',

@@ -7,6 +7,7 @@ import {
   type HexAddress,
   type IndexerLogService,
   IndexerType,
+  type InterfoldLogService,
   type IPluginInterfaceType,
   ITokenType,
   type LockManagerLogService,
@@ -147,6 +148,11 @@ const ConfigIndexerHelper = {
       const service = `${IndexerType.policyPlugin}-${network}-${address}`
       return service as PolicyPluginLogService
     },
+
+    interfold: (network: NetworksEnum, address: HexAddress): InterfoldLogService => {
+      const service = `${IndexerType.interfold}-${network}-${address}`
+      return service as InterfoldLogService
+    },
   },
 
   // Type guard functions for runtime checks
@@ -197,6 +203,9 @@ const ConfigIndexerHelper = {
     isPolicyContract: (service: LogServicePattern): service is PolicyContractLogService =>
       service?.startsWith(`${IndexerType.policyContract}-`) ?? false,
 
+    isInterfold: (service: LogServicePattern): service is InterfoldLogService =>
+      service?.startsWith(`${IndexerType.interfold}-`) ?? false,
+
     isPlugin: (service: LogServicePattern): service is PluginLogService => {
       if (service === null) return false
       // If it's not any of the other types, and it's not null, it should be a plugin
@@ -215,7 +224,8 @@ const ConfigIndexerHelper = {
         !ConfigIndexerHelper.guards.isExecution(service) &&
         !ConfigIndexerHelper.guards.isLockManager(service) &&
         !ConfigIndexerHelper.guards.isCampaignStrategy(service) &&
-        !ConfigIndexerHelper.guards.isPolicyContract(service)
+        !ConfigIndexerHelper.guards.isPolicyContract(service) &&
+        !ConfigIndexerHelper.guards.isInterfold(service)
       )
     },
   },
@@ -434,6 +444,19 @@ const ConfigIndexerHelper = {
         }
       }
 
+      if (ConfigIndexerHelper.guards.isInterfold(service)) {
+        // interfold-{network}-{address}
+        const { network, remainingParts } = extractNetwork(parts, 1)
+        const networkIndex = remainingParts.indexOf(network)
+        const addressParts = remainingParts.slice(networkIndex + 1)
+
+        return {
+          type: IndexerType.interfold,
+          network,
+          address: addressParts.join('-'),
+        }
+      }
+
       // Default to plugin pattern
       // {interfaceType}-{network}-{address}
       const interfaceType = parts[0]
@@ -471,6 +494,7 @@ const ConfigIndexerHelper = {
       if (ConfigIndexerHelper.guards.isNativeWithdraw(service)) return IndexerType.nativeWithdraw
       if (ConfigIndexerHelper.guards.isCampaignStrategy(service)) return IndexerType.campaignStrategy
       if (ConfigIndexerHelper.guards.isPolicyContract(service)) return IndexerType.policyContract
+      if (ConfigIndexerHelper.guards.isInterfold(service)) return IndexerType.interfold
       if (ConfigIndexerHelper.guards.isPlugin(service)) return IndexerType.plugin
 
       return null
@@ -525,6 +549,7 @@ const ConfigIndexerHelper = {
         ConfigIndexerHelper.guards.isNativeWithdraw(service) ||
         ConfigIndexerHelper.guards.isCampaignStrategy(service) ||
         ConfigIndexerHelper.guards.isPolicyContract(service) ||
+        ConfigIndexerHelper.guards.isInterfold(service) ||
         (ConfigIndexerHelper.guards.isPlugin(service) && hasValidNetwork)
       )
     },

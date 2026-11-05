@@ -153,6 +153,10 @@ class Settings {
   @prop({ type: () => String })
   public minProposerVotingPower!: string
 
+  // CRISP only: voting power needed to submit an encrypted ballot
+  @prop({ type: () => String })
+  public minVoterVotingPower?: string
+
   @prop({ type: () => [Stages], _id: false })
   public stages!: Stages[]
 }
@@ -265,6 +269,7 @@ class TxInfo {
 @index({ pluginAddress: 1, network: 1, blockTimestamp: -1 })
 @index({ incrementalId: -1, id: -1 })
 @index({ pluginAddress: 1, proposalIndex: 1, network: 1 })
+@index({ network: 1, e3Id: 1 }, { sparse: true })
 @index({ daoAddress: 1, network: 1, incrementalId: -1, id: -1 })
 @index({ pluginAddress: 1, network: 1, incrementalId: -1, id: -1 })
 export default class Proposal extends Model {
@@ -352,6 +357,22 @@ export default class Proposal extends Model {
 
   @prop({ type: () => Metrics, _id: false, default: {} })
   public metrics!: Metrics
+
+  // CRISP only: the Interfold round of the proposal and what the coordinator reported about it
+  @prop({ type: () => String })
+  public e3Id?: string
+
+  // The round's plaintext output is published, or the proposal is executed
+  @prop({ type: () => Boolean })
+  public isTallyPublished?: boolean
+
+  // Interfold `FailureReason` of the round, unset while it has not failed
+  @prop({ type: () => Number })
+  public failureReason?: number
+
+  // Tally counts are in units of this divisor
+  @prop({ type: () => String })
+  public votingPowerDivisor?: string
 
   // SPP Proposal
   @prop({ type: () => Number })
@@ -818,6 +839,10 @@ export default class Proposal extends Model {
           },
           metrics: 1,
           initialTally: 1,
+          e3Id: 1,
+          isTallyPublished: 1,
+          failureReason: 1,
+          votingPowerDivisor: 1,
         },
       },
     ]
@@ -1223,6 +1248,10 @@ export default class Proposal extends Model {
           },
           metrics: 1,
           initialTally: 1,
+          e3Id: 1,
+          isTallyPublished: 1,
+          failureReason: 1,
+          votingPowerDivisor: 1,
           ...(extraParams.daoInfo && { dao: 1 }),
         },
       },

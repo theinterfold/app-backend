@@ -173,6 +173,10 @@ export const AggregationQueryHelper = {
         media: 1,
         metrics: 1,
         initialTally: 1,
+        e3Id: 1,
+        isTallyPublished: 1,
+        failureReason: 1,
+        votingPowerDivisor: 1,
         settings: 1,
       },
     })

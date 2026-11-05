@@ -110,6 +110,7 @@ class Link {
 )
 @index({ network: 1, tokenAddress: 1 })
 @index({ network: 1, status: 1, interfaceType: 1 })
+@index({ network: 1, interfoldAddress: 1 }, { sparse: true })
 @index({ daoAddress: 1, network: 1, status: 1, isSupported: 1, interfaceType: 1 })
 @index({ address: 1 })
 @index({ network: 1, 'votingEscrow.escrowAddress': 1 })
@@ -224,6 +225,10 @@ export default class Plugin extends Model {
 
   @prop({ type: () => VotingEscrow, _id: false, default: null })
   public votingEscrow?: VotingEscrow
+
+  // CRISP only: the Interfold coordinator the plugin's rounds run on, read from `interfold()`
+  @prop({ type: () => String })
+  public interfoldAddress?: HexAddress
 
   @prop({ type: () => String, default: null })
   public conditionAddress?: HexAddress

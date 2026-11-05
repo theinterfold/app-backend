@@ -28,6 +28,7 @@ import { ExecuteSelectorCondition } from '@artifacts/ExecuteSelectorCondition'
 import { ExitQueue } from '@artifacts/ExitQueue'
 import { GaugeVoter } from '@artifacts/GaugeVoter'
 import { GovernanceERC20 } from '@artifacts/GovernanceERC20'
+import { Interfold } from '@artifacts/Interfold'
 import { LockManager } from '@artifacts/LockManager'
 import { LockToVote } from '@artifacts/LockToVote'
 import { Multisig } from '@artifacts/Multisig'
@@ -41,6 +42,7 @@ import { TokenVoting } from '@artifacts/TokenVoting'
 import { VotingEscrow } from '@artifacts/VotingEscrow'
 import { VotingEscrowIncreasing } from '@artifacts/VotingEscrowIncreasing'
 import { CapitalDistributorHandler } from '@handlers/capitalDistributorHandler'
+import { CrispInterfoldHandler } from '@handlers/crispInterfoldHandler'
 import { CrossChainHandler } from '@handlers/crossChainHandler'
 import { DaoExecutionHandler } from '@handlers/daoExecutionHandler'
 import { ExecuteHandler } from '@handlers/executeHandler'
@@ -201,6 +203,30 @@ const IndexerEventConfig: IIndexerConfig[] = [
       {
         abi: CrispVoting.abi,
         handler: PluginSettingHandler.crispE3SettingsUpdated,
+      },
+    ],
+  },
+  {
+    event: 'PlaintextOutputPublished',
+    enableHistorical: false,
+    topic: new Interface(Interfold.abi).getEvent('PlaintextOutputPublished')?.topicHash!,
+    config: [
+      {
+        abi: Interfold.abi,
+        handler: CrispInterfoldHandler.plaintextOutputPublished,
+        batchHandler: CrispInterfoldHandler.plaintextOutputPublishedBatch,
+      },
+    ],
+  },
+  {
+    event: 'E3Failed',
+    enableHistorical: false,
+    topic: new Interface(Interfold.abi).getEvent('E3Failed')?.topicHash!,
+    config: [
+      {
+        abi: Interfold.abi,
+        handler: CrispInterfoldHandler.e3Failed,
+        batchHandler: CrispInterfoldHandler.e3FailedBatch,
       },
     ],
   },
