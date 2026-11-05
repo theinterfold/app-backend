@@ -109,6 +109,14 @@ describe('Helpers: ConfigIndexerHelper', () => {
       })
     })
 
+    describe('interfold', () => {
+      it('should create interfold logService', () => {
+        const network = NetworksEnum.ethereumSepolia
+        const address = '0x3333333333333333333333333333333333333333'
+        expect(ConfigIndexerHelper.builders.interfold(network, address)).to.equal(`interfold-${network}-${address}`)
+      })
+    })
+
     describe('policyPlugin', () => {
       it('should create policyPlugin logService', () => {
         const network = NetworksEnum.ethereumMainnet
@@ -361,6 +369,19 @@ describe('Helpers: ConfigIndexerHelper', () => {
       })
     })
 
+    describe('isInterfold', () => {
+      it('should return true for interfold service and keep it out of the plugin services', () => {
+        const service = 'interfold-ethereum-sepolia-0x123'
+        expect(ConfigIndexerHelper.guards.isInterfold(service)).to.be.true
+        expect(ConfigIndexerHelper.guards.isPlugin(service)).to.be.false
+      })
+
+      it('should return false for non-interfold service', () => {
+        expect(ConfigIndexerHelper.guards.isInterfold('dao-ethereum-mainnet-0x123')).to.be.false
+        expect(ConfigIndexerHelper.guards.isInterfold(null)).to.be.false
+      })
+    })
+
     describe('isPolicyContract', () => {
       it('should return true for policyContract service', () => {
         const service = 'policyContract-ethereum-mainnet-0x123'
@@ -594,6 +615,15 @@ describe('Helpers: ConfigIndexerHelper', () => {
         })
       })
 
+      it('should parse interfold service', () => {
+        const result = ConfigIndexerHelper.parser.parse('interfold-ethereum-sepolia-0x123')
+        expect(result).to.deep.equal({
+          type: IndexerType.interfold,
+          network: 'ethereum-sepolia',
+          address: '0x123',
+        })
+      })
+
       it('should parse dao service', () => {
         const result = ConfigIndexerHelper.parser.parse('dao-polygon-mainnet-0x789')
         expect(result).to.deep.equal({
@@ -647,6 +677,7 @@ describe('Helpers: ConfigIndexerHelper', () => {
         expect(ConfigIndexerHelper.parser.getType('policyContract-ethereum-mainnet-0x123')).to.equal(
           IndexerType.policyContract,
         )
+        expect(ConfigIndexerHelper.parser.getType('interfold-ethereum-sepolia-0x123')).to.equal(IndexerType.interfold)
         expect(ConfigIndexerHelper.parser.getType('dao-ethereum-mainnet-0x123')).to.equal(IndexerType.dao)
         expect(ConfigIndexerHelper.parser.getType('permission-ethereum-mainnet-0x123')).to.equal(IndexerType.permission)
         expect(ConfigIndexerHelper.parser.getType('ERC20-ethereum-mainnet-0x123')).to.equal(IndexerType.token)
@@ -689,6 +720,7 @@ describe('Helpers: ConfigIndexerHelper', () => {
           .to.be.true
         expect(ConfigIndexerHelper.validators.isValidLogService('transfer-ethereum-mainnet')).to.be.true
         expect(ConfigIndexerHelper.validators.isValidLogService('policyContract-ethereum-mainnet-0x123')).to.be.true
+        expect(ConfigIndexerHelper.validators.isValidLogService('interfold-ethereum-sepolia-0x123')).to.be.true
       })
 
       it('should return false for invalid services', () => {

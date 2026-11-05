@@ -4,15 +4,18 @@ import RabbitMQHelper from '@helpers/rabbitMQ'
 import logger from '@logger'
 import { LogGauge } from '@plugins/logGauge'
 import { LogPolicy } from '@plugins/logPolicy'
+import { CrispRoundSweep } from '@services/aragon-plugins/crispRoundSweep'
 import { LogAdmin } from '@services/aragon-plugins/logAdmin'
 import { LogCapitalDistributor } from '@services/aragon-plugins/logCapitalDistributor'
 import { LogCrossChain } from '@services/aragon-plugins/logCrossChain'
 import { LogDao } from '@services/aragon-plugins/logDao'
 import { LogDelegateChanged } from '@services/aragon-plugins/logDelegateChanged'
+import { LogInterfold } from '@services/aragon-plugins/logInterfold'
 import { LogMultiSig } from '@services/aragon-plugins/logMultisig'
 import { LogSelectorPermission } from '@services/aragon-plugins/logSelectorPermission'
 import { LogSpp } from '@services/aragon-plugins/logSPP'
 import { LogTokenVoting } from '@services/aragon-plugins/logTokenVoting'
+import { TaskSchedulerState } from '@state/taskSchedulerState'
 import {
   EnumConnection,
   EnumQueueName,
@@ -20,6 +23,7 @@ import {
   IPluginInterfaceType,
   IPluginStatus,
   type IQueueDao,
+  type IQueueLogInterfold,
   type IQueuePlugin,
   type IQueueSyncDelegateChanged,
   type IService,
@@ -27,6 +31,10 @@ import {
 } from '@types'
 
 const llo = logger.logMeta.bind(null, { service: 'service:PluginSyncService' })
+
+// The scheduler only runs a task on a tick that lands after nextStartAt. A tick equal to the interval arrives a few
+// milliseconds early and gets skipped, which doubles the effective period, so the tick has to be much shorter.
+const TASK_CHECK_INTERVAL_MS = 5 * 1000
 
 const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => Promise<void> } = {
   name: EnumServiceName.ARAGON_PLUGINS,
@@ -75,10 +83,26 @@ const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => 
       await LogDelegateChanged.start(plugin)
     })
 
+    await RabbitMQHelper.process(EnumQueueName.logInterfold, async job => {
+      await LogInterfold.start((job.params as IQueueLogInterfold).network)
+    })
+
+    await TaskSchedulerState.getInstance().startTask('crispRoundSweep', {
+      fn: () => [[{ crispRoundSweep: CrispRoundSweep }]],
+      interval: config.SERVICES.ARAGON_PLUGINS.CRISP_ROUND_SWEEP_INTERVAL,
+      checkInterval: TASK_CHECK_INTERVAL_MS,
+      runNow: false,
+      stopOnError: false,
+      onError: (error: any) => {
+        logger.error('PluginSyncService crispRoundSweep task error', llo({ error }))
+      },
+    })
+
     logger.info('PluginSyncService service started', llo({}))
   },
 
   async stop() {
+    TaskSchedulerState.getInstance().stopTask('crispRoundSweep')
     logger.info('PluginSyncService service stopped', llo({}))
   },
 
@@ -124,6 +148,8 @@ const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => 
         } else {
           logger.warn('Sync plugin token not supported', llo({ plugin: plugin?.address, token: token?.address }))
         }
+
+        if (plugin.interfaceType === IPluginInterfaceType.crisp) await LogInterfold.queue(plugin)
         break
       }
       case IPluginInterfaceType.spp: {

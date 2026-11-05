@@ -4,6 +4,7 @@ import { CrossChainExecuteSelectorCondition } from '@artifacts/CrossChainExecute
 import { DAORegistry } from '@artifacts/daoRegistry'
 import { ExecuteSelectorCondition } from '@artifacts/ExecuteSelectorCondition'
 import { ExitQueue } from '@artifacts/ExitQueue'
+import { Interfold } from '@artifacts/Interfold'
 import { LockManager } from '@artifacts/LockManager'
 import { LockToVote } from '@artifacts/LockToVote'
 import { Multisig } from '@artifacts/Multisig'
@@ -177,6 +178,20 @@ describe('ConfigIndexer', () => {
       expect(e3SettingsConfig).to.exist
       expect(e3SettingsConfig!.topic).to.equal(id('E3SettingsUpdated(uint8,uint8,bytes)'))
       expect(e3SettingsConfig!.config[0].abi).to.equal(CrispVoting.abi)
+    })
+  })
+
+  describe('Interfold events', () => {
+    it('should subscribe to the deployed Interfold event signatures, live only', () => {
+      const plaintextOutputConfig = ConfigIndexer.find(c => c.event === 'PlaintextOutputPublished')
+      expect(plaintextOutputConfig!.topic).to.equal(id('PlaintextOutputPublished(uint256,bytes,bytes)'))
+      expect(plaintextOutputConfig!.config[0].abi).to.equal(Interfold.abi)
+      expect(plaintextOutputConfig!.enableHistorical).to.be.false
+
+      const e3FailedConfig = ConfigIndexer.find(c => c.event === 'E3Failed')
+      expect(e3FailedConfig!.topic).to.equal(id('E3Failed(uint256,uint8,uint8)'))
+      expect(e3FailedConfig!.config[0].abi).to.equal(Interfold.abi)
+      expect(e3FailedConfig!.enableHistorical).to.be.false
     })
   })
 

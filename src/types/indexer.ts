@@ -21,6 +21,7 @@ export enum IndexerType {
   campaignStrategy = 'campaignStrategy',
   policyContract = 'policyContract',
   policyPlugin = 'policyPlugin',
+  interfold = 'interfold',
 }
 
 export enum IEnumIndexerService {
@@ -46,6 +47,7 @@ export type LogServicePattern =
   | CampaignStrategyLogService
   | PolicyContractLogService
   | PolicyPluginLogService
+  | InterfoldLogService
   | null
 
 // Individual pattern types
@@ -65,6 +67,7 @@ export type NativeWithdrawLogService = `${IndexerType.nativeWithdraw}-${Networks
 export type ExecutionLogService = `${IndexerType.execution}-${NetworksEnum}-${string}`
 export type PolicyContractLogService = `${IndexerType.policyContract}-${NetworksEnum}-${string}`
 export type PolicyPluginLogService = `${IndexerType.policyPlugin}-${NetworksEnum}-${string}`
+export type InterfoldLogService = `${IndexerType.interfold}-${NetworksEnum}-${string}`
 
 // Type for parsed log service info
 export type LogServiceInfo =
@@ -94,3 +97,4 @@ export type LogServiceInfo =
   | { type: IndexerType.nativeWithdraw; network: NetworksEnum; address: string }
   | { type: IndexerType.campaignStrategy; network: NetworksEnum; address: string }
   | { type: IndexerType.policyContract; network: NetworksEnum; address: string }
+  | { type: IndexerType.interfold; network: NetworksEnum; address: string }

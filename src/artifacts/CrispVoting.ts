@@ -284,5 +284,33 @@ export const CrispVoting = {
       name: 'VotingSettingsUpdated',
       type: 'event',
     },
+    {
+      inputs: [],
+      name: 'interfold',
+      outputs: [{ internalType: 'contract IInterfold', name: '', type: 'address' }],
+      stateMutability: 'view',
+      type: 'function',
+    },
+    {
+      inputs: [{ internalType: 'uint256', name: '_blockNumber', type: 'uint256' }],
+      name: 'totalVotingPower',
+      outputs: [{ internalType: 'uint256', name: '', type: 'uint256' }],
+      stateMutability: 'view',
+      type: 'function',
+    },
+    {
+      inputs: [{ internalType: 'uint256', name: '_proposalId', type: 'uint256' }],
+      name: 'getTally',
+      outputs: [
+        {
+          components: [{ internalType: 'uint256[]', name: 'counts', type: 'uint256[]' }],
+          internalType: 'struct ICrispVoting.TallyResults',
+          name: '',
+          type: 'tuple',
+        },
+      ],
+      stateMutability: 'view',
+      type: 'function',
+    },
   ],
 }

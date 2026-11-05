@@ -1,3 +1,4 @@
+import config from '@config'
 import { Models } from '@dbModels'
 import RabbitMQHelper from '@helpers/rabbitMQ'
 import logger from '@logger'
@@ -10,18 +11,24 @@ import { LogPolicy } from '@plugins/logPolicy'
 import { LogSelectorPermission } from '@plugins/logSelectorPermission'
 import { LogSpp } from '@plugins/logSPP'
 import { LogTokenVoting } from '@plugins/logTokenVoting'
+import { CrispRoundSweep } from '@services/aragon-plugins/crispRoundSweep'
 import AragonPluginsService from '@services/aragon-plugins/index'
 import { LogDelegateChanged } from '@services/aragon-plugins/logDelegateChanged'
+import { LogInterfold } from '@services/aragon-plugins/logInterfold'
+import { TaskSchedulerState } from '@state/taskSchedulerState'
 import { EnumQueueName, IPluginInterfaceType, IPluginStatus, ITokenType, NetworksEnum } from '@types'
 import { expect } from 'chai'
 import * as sinon from 'sinon'
-import { SinonSandbox } from 'sinon'
+import { SinonSandbox, SinonStubbedInstance } from 'sinon'
 
 describe('AragonPlugins: index', () => {
   let sandbox: SinonSandbox
+  let scheduler: SinonStubbedInstance<TaskSchedulerState>
 
   beforeEach(async () => {
     sandbox = sinon.createSandbox()
+    scheduler = sandbox.createStubInstance(TaskSchedulerState)
+    sandbox.stub(TaskSchedulerState, 'getInstance').returns(scheduler)
   })
 
   afterEach(() => {
@@ -43,6 +50,7 @@ describe('AragonPlugins: index', () => {
         EnumQueueName.plugins,
         EnumQueueName.requeue,
         EnumQueueName.syncDelegateChanged,
+        EnumQueueName.logInterfold,
       ]
       expect(processStub.callCount).to.eq(queues.length)
 
@@ -77,6 +85,7 @@ describe('AragonPlugins: index', () => {
         EnumQueueName.plugins,
         EnumQueueName.requeue,
         EnumQueueName.syncDelegateChanged,
+        EnumQueueName.logInterfold,
       ]
       expect(processStub.callCount).to.eq(queues.length)
 
@@ -217,7 +226,7 @@ describe('AragonPlugins: index', () => {
       const crawl = sandbox.stub(LogSelectorPermission, 'start').resolves()
       await AragonPluginsService.start()
 
-      expect(process.callCount).to.equal(5)
+      expect(process.callCount).to.equal(6)
       expect(process.getCall(1).args[0]).to.equal(EnumQueueName.logSelectorPermission)
       await process.getCall(1).args[1]({ id: 'selector-job', params })
 
@@ -416,6 +425,7 @@ describe('AragonPlugins: index', () => {
         hasDelegate: true,
       } as any)
       const logTokenVotingStub = sandbox.stub(LogTokenVoting, 'start').resolves()
+      const logInterfoldQueueStub = sandbox.stub(LogInterfold, 'queue').resolves()
 
       await AragonPluginsService.start()
 
@@ -426,6 +436,60 @@ describe('AragonPlugins: index', () => {
       })
 
       expect(logTokenVotingStub.calledOnce).to.be.true
+      // the Interfold crawl follows the plugin's own, so the proposals its events refer to exist
+      expect(logInterfoldQueueStub.calledOnce).to.be.true
+      expect(logInterfoldQueueStub.calledAfter(logTokenVotingStub)).to.be.true
+    })
+
+    it('should not queue the Interfold crawl for a tokenVoting plugin', async () => {
+      const processStub = sandbox.stub(RabbitMQHelper, 'process')
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.tokenVoting,
+        tokenAddress: '0xTokenAddress',
+        network: NetworksEnum.ethereumMainnet,
+      })
+      sandbox
+        .stub(Models.Token, 'findOne')
+        .resolves({ type: ITokenType.ERC20, isGovernance: true, hasDelegate: true } as any)
+      sandbox.stub(LogTokenVoting, 'start').resolves()
+      const logInterfoldQueueStub = sandbox.stub(LogInterfold, 'queue').resolves()
+
+      await AragonPluginsService.start()
+
+      await processStub.getCall(2).args[1]({
+        id: 'some-id',
+        params: { address: '0xPluginAddress', network: NetworksEnum.ethereumMainnet },
+      })
+
+      expect(logInterfoldQueueStub.called).to.be.false
+    })
+
+    it('should schedule the CRISP round sweep, ticking faster than its interval, and stop it with the service', async () => {
+      sandbox.stub(RabbitMQHelper, 'process')
+
+      await AragonPluginsService.start()
+      await AragonPluginsService.stop()
+
+      expect(scheduler.startTask.calledOnce).to.be.true
+      const [name, options] = scheduler.startTask.firstCall.args
+      expect(name).to.equal('crispRoundSweep')
+      expect(options.fn()).to.deep.equal([[{ crispRoundSweep: CrispRoundSweep }]])
+      expect(options.interval).to.equal(config.SERVICES.ARAGON_PLUGINS.CRISP_ROUND_SWEEP_INTERVAL)
+      expect(options.checkInterval).to.equal(5000)
+      expect(options.stopOnError).to.be.false
+      expect(scheduler.stopTask.calledOnceWith('crispRoundSweep')).to.be.true
+    })
+
+    it('should crawl the Interfold of the network when a logInterfold message is received', async () => {
+      const processStub = sandbox.stub(RabbitMQHelper, 'process')
+      const logInterfoldStub = sandbox.stub(LogInterfold, 'start').resolves()
+
+      await AragonPluginsService.start()
+
+      const handler = processStub.getCall(5).args[1]
+      await handler({ id: NetworksEnum.ethereumSepolia, params: { network: NetworksEnum.ethereumSepolia } })
+
+      expect(logInterfoldStub.calledOnceWith(NetworksEnum.ethereumSepolia)).to.be.true
     })
 
     it('should process plugins queue for tokenVoting BondedVotes interface type', async () => {

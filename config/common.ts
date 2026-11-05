@@ -829,6 +829,15 @@ const getConfigObject = (sourceConfig: Record<string, any>): IConfig => {
         SYNC_ALL: utils.configParser(sourceConfig, 'bool', 'SERVICES_ARAGON_INDEXER_SYNC_ALL', false),
       },
 
+      ARAGON_PLUGINS: {
+        CRISP_ROUND_SWEEP_INTERVAL: utils.configParser(
+          sourceConfig,
+          'number',
+          'SERVICES_ARAGON_PLUGINS_CRISP_ROUND_SWEEP_INTERVAL',
+          5 * 60 * 1000,
+        ), // 5 minutes
+      },
+
       ARAGON_RATES: {
         NAME: utils.configParser(sourceConfig, 'string', 'SERVICES_ARAGON_RATES_NAME', 'ARAGON-RATES'),
         RATES_INTERVAL: utils.configParser(
