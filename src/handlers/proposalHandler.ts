@@ -936,8 +936,7 @@ export const ProposalHandler = {
         llo,
       )
 
-      // Link only once the parent lists the sub-proposals: a body proposal indexed in the meantime links itself from
-      // the parent's list, so the parent must be visible before this side looks for the sub-proposals
+      // Link only once the parent lists the sub-proposals, so a body proposal indexed in the meantime finds them
       if (updatedProposal) {
         await ProposalHandler.linkParentToSubProposals(proposal, newSubProposals, info.network)
       }
@@ -1002,9 +1001,8 @@ export const ProposalHandler = {
       return
     }
 
-    // The SPP and each of its bodies are crawled independently, so either proposal can be indexed first. Every side
-    // therefore commits its own record before it looks for the other one: whichever lands last always finds its
-    // counterpart, and the pairing no longer depends on the order the crawlers run in.
+    // The SPP and its bodies are crawled independently, so either side can be indexed first. Each commits its own
+    // record before looking for the other, so whichever lands last finds its counterpart.
     if (plugin.isSubPlugin) {
       await DbOperations.updateDocument(
         proposal,
@@ -1078,8 +1076,7 @@ export const ProposalHandler = {
         logger.verbose('Update proposal - pairSppProposals', llo({ logId: proposal.id, info }))
       })
 
-      // Link the sub-proposals only after the parent is committed, outside the transaction: the transaction reads from
-      // a snapshot taken before it started, which would not contain a sub-proposal indexed in the meantime
+      // Outside the transaction, whose snapshot would miss a sub-proposal indexed in the meantime
       await ProposalHandler.linkParentToSubProposals(proposal, subProposals, plugin.network)
     } catch (error) {
       logger.error('Error pairSppProposals', llo({ error, network: proposal.network, proposalId: proposal.id }))
@@ -1087,9 +1084,8 @@ export const ProposalHandler = {
   },
 
   /**
-   * Sets `parentProposal` on every listed sub-proposal that is already indexed. Atomic and idempotent, so it can be
-   * re-run; sub-proposals indexed later are linked by `linkSubProposalToParent`.
-   * The parent MUST already be committed with these `subProposals` before this runs.
+   * Sets `parentProposal` on the listed sub-proposals that are already indexed; later ones link themselves through
+   * `linkSubProposalToParent`. The parent MUST already be committed with these `subProposals`.
    */
   linkParentToSubProposals: async (parent: Proposal, subProposals: Proposal['subProposals'], network: NetworksEnum) => {
     await Promise.all(
@@ -1122,9 +1118,7 @@ export const ProposalHandler = {
   },
 
   /**
-   * Sets `parentProposal` on a sub-proposal from the SPP proposal that already lists it in `subProposals`.
-   * Covers the case where the sub-proposal is indexed after the SPP proposal paired it, in which case the SPP side
-   * found nothing to link.
+   * Sets `parentProposal` on a sub-proposal indexed after the SPP proposal that lists it in `subProposals`.
    */
   linkSubProposalToParent: async (subProposal: Proposal) => {
     const parent = await Models.Proposal.findOne({

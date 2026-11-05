@@ -361,19 +361,19 @@ export const PluginSettingHandler = {
     return relatedPlugin
   },
 
-  // CRISP's VotingSettingsUpdated has no voting mode and carries percentages out of 100 (not ppm). The E3 request
-  // parameters are written by `initialize` without an event, so they are read from the contract.
+  // CRISP has no voting mode and its percentages are out of 100, not ppm. `initialize` sets the E3 parameters without
+  // an event, so they are read from the contract.
   crispSettings: async (parsedEvent: LogDescription, activeSetting: Setting | null, info: ILogInfo) => {
     const onChain = await Web3Helper.getCrispSettings(info.address, info.network, info.blockNumber)
 
     return {
       minVoterVotingPower: parsedEvent.args.minVoterVotingPower.toString(),
-      committeeSize: onChain ? onChain.committeeSize : activeSetting?.committeeSize,
-      paramSet: onChain ? onChain.paramSet : activeSetting?.paramSet,
+      committeeSize: onChain?.committeeSize ?? activeSetting?.committeeSize,
+      paramSet: onChain?.paramSet ?? activeSetting?.paramSet,
     }
   },
 
-  // Often emitted with VotingSettingsUpdated by one proposal, so the active setting is patched in place
+  // Usually emitted alongside VotingSettingsUpdated, so the active setting is patched in place
   crispE3SettingsUpdated: async (parsedEvent: LogDescription, info: ILogInfo): Promise<Plugin | undefined> => {
     const { address: pluginAddress, blockNumber, network } = info
     const relatedPlugin = await Models.Plugin.findByAddress(pluginAddress, network)
@@ -723,7 +723,12 @@ export const PluginSettingHandler = {
         stage.plugins.map(async subPlugin => {
           if (SafeBodyMembersModule.isSafeBody(subPlugin)) return
 
-          const relatedPlugin = await Models.Plugin.findByAddress(subPlugin.address, info.network)
+          // Scoped to the SPP's DAO: a body address is not proof the DAO owns it
+          const relatedPlugin = await Models.Plugin.findOneByDao({
+            address: subPlugin.address,
+            daoAddress: plugin.daoAddress,
+            network: info.network,
+          })
 
           if (!relatedPlugin) {
             logger.warn(
