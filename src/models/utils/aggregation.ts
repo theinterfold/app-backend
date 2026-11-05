@@ -176,6 +176,8 @@ export const AggregationQueryHelper = {
         e3Id: 1,
         isTallyPublished: 1,
         failureReason: 1,
+        e3Stage: 1,
+        e3StageDeadline: 1,
         votingPowerDivisor: 1,
         settings: 1,
       },
