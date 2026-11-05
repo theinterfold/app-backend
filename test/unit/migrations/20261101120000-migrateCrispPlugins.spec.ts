@@ -78,6 +78,21 @@ describe('migration: migrateCrispPlugins', () => {
       expect(detectStub.callCount).to.equal(2)
     })
 
+    it('should skip a plugin that cannot be probed and keep looking at the others', async () => {
+      const unprobeable = '0x4444444444444444444444444444444444444444'
+      await createPlugin(unprobeable, IPluginInterfaceType.tokenVoting)
+      await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting)
+      sandbox.stub(logger, 'error')
+      detectStub.callsFake(async (address: string) => {
+        if (address === unprobeable) throw new Error('rpc down')
+        return { type: IPluginInterfaceType.crisp } as IPluginInfo
+      })
+
+      const result = await findMisdetectedCrispPlugins()
+
+      expect(result.map(plugin => plugin.address)).to.deep.equal([crispAddress])
+    })
+
     it('should skip uninstalled plugins and plugins already stored as crisp', async () => {
       await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting, IPluginStatus.abandoned)
       await createPlugin(tokenVotingAddress, IPluginInterfaceType.crisp)
@@ -146,7 +161,7 @@ describe('migration: migrateCrispPlugins', () => {
 
       expect(sendMessageStub.calledOnceWith(EnumQueueName.plugins)).to.be.true
       expect(sendMessageStub.firstCall.args[1]).to.deep.equal({
-        id: crispAddress,
+        id: `${network}-${crispAddress}`,
         params: { address: crispAddress, network },
       })
     })
@@ -189,6 +204,31 @@ describe('migration: migrateCrispPlugins', () => {
       expect(sendMessageStub.called).to.be.false
     })
 
+    it('should leave the plugin untouched when its voting token cannot be resolved', async () => {
+      ;(ProxyToken.saveAndGetToken as SinonStub).resolves(null)
+      const plugin = await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting)
+      await Models.Setting.create({
+        blockNumber: 1000,
+        transactionHash: plugin.transactionHash,
+        status: ISettingStatus.active,
+        daoAddress,
+        pluginAddress: crispAddress,
+        network,
+        supportThreshold: 500_000,
+      })
+
+      let error: Error | undefined
+      try {
+        await migrateCrispPlugin(plugin)
+      } catch (e) {
+        error = e as Error
+      }
+
+      expect(error?.message).to.contain('Cannot resolve voting token')
+      const settings = await Models.Setting.find({ pluginAddress: crispAddress, network })
+      expect(settings.map(setting => setting.supportThreshold)).to.deep.equal([500_000])
+    })
+
     it('should leave the plugin selectable when the contract cannot be read', async () => {
       ;(Web3Helper.getCrispSettings as SinonStub).resolves(null)
       const plugin = await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting)
@@ -223,6 +263,31 @@ describe('migration: migrateCrispPlugins', () => {
       expect((await Models.Plugin.findOne({ address: tokenVotingAddress })).interfaceType).to.equal(
         IPluginInterfaceType.tokenVoting,
       )
+    })
+
+    it('should skip a plugin that cannot be migrated and still migrate the others', async () => {
+      const planted = '0x4444444444444444444444444444444444444444'
+      await createPlugin(planted, IPluginInterfaceType.tokenVoting)
+      await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting)
+      detectStub.resolves({ type: IPluginInterfaceType.crisp } as IPluginInfo)
+      const errorStub = sandbox.stub(logger, 'error')
+      sandbox.stub(Web3Helper, 'getCrispSettings').callsFake(async (address: string) => {
+        if (address === planted) throw new Error('execution reverted')
+        return onChainSettings
+      })
+      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({ isGovernance: true } as any)
+      sandbox.stub(PluginSettingHandler, 'isSupported').resolves()
+      sandbox.stub(PluginSlug, 'updateSlug').resolves('crisp')
+
+      await migrateCrispPluginsMigration.start()
+
+      expect((await Models.Plugin.findOne({ address: crispAddress })).interfaceType).to.equal(
+        IPluginInterfaceType.crisp,
+      )
+      expect((await Models.Plugin.findOne({ address: planted })).interfaceType).to.equal(
+        IPluginInterfaceType.tokenVoting,
+      )
+      expect(errorStub.calledWith('Migration failed' as any)).to.be.false
     })
 
     it('should log and rethrow when it fails', async () => {

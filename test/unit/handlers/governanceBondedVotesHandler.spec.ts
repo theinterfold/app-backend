@@ -4,13 +4,14 @@ import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
 import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
 import logger from '@logger'
 import { Erc20Governance } from '@src/governance/erc20Governance'
-import { NetworksEnum } from '@types'
+import { IPluginStatus, NetworksEnum } from '@types'
 import { expect } from 'chai'
 import * as sinon from 'sinon'
 import { SinonSandbox, SinonStub } from 'sinon'
 
 describe('Handlers: GovernanceBondedVotesHandler', () => {
   let sandbox: SinonSandbox
+  let distinctStub: SinonStub
   let getVotesStub: SinonStub
   let getBondedDelegateStub: SinonStub
   let createMembersStub: SinonStub
@@ -27,6 +28,7 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
   const alice = '0x1111111111111111111111111111111111111111'
   const bob = '0x2222222222222222222222222222222222222222'
   const carol = '0x3333333333333333333333333333333333333333'
+  const lookAlike = '0x9999999999999999999999999999999999999999'
   const zero = '0x0000000000000000000000000000000000000000'
   const plugin = { address: '0x7777777777777777777777777777777777777777', daoAddress: '0xDao' }
 
@@ -39,6 +41,7 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
     sandbox = sinon.createSandbox()
     sandbox.stub(logger, 'error')
     sandbox.stub(Models.Token, 'find').resolves([{ address: token }] as any)
+    distinctStub = sandbox.stub(Models.Plugin, 'distinct').resolves([token])
     sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves({ checkpoints, votesSource, escrow })
     getVotesStub = sandbox.stub(GovernanceBondedVotesHelper, 'getVotes').callsFake(async (_t, _n, account) => {
       return account === alice ? 100n : 5n
@@ -184,19 +187,100 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
       expect(updateVotingPowerStub.called).to.be.false
     })
 
-    it('should write nothing and rethrow when voting power cannot be read', async () => {
+    it('should write nothing and log, not throw, when voting power cannot be read for a resolved token', async () => {
       getVotesStub.rejects(new Error('rpc down'))
       const { parsedEvent, info } = event('BondedCheckpointed', { bondOwner: alice }, checkpoints)
 
-      let error: Error | undefined
-      try {
-        await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
-      } catch (err) {
-        error = err as Error
-      }
+      await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
 
-      expect(error?.message).to.equal('rpc down')
       expect(updateVotingPowerStub.called).to.be.false
+      expect((logger.error as SinonStub).calledOnce).to.be.true
+    })
+
+    it('should read the bonded delegate once per bond owner, whatever the number of checkpoints', async () => {
+      await GovernanceBondedVotesHandler.votingPowerChangedBatch([
+        event('BondedCheckpointed', { bondOwner: alice }, checkpoints, 10),
+        event('BondedCheckpointed', { bondOwner: alice }, checkpoints, 11),
+        event('BondedCheckpointed', { bondOwner: alice }, checkpoints, 12),
+      ])
+
+      expect(getBondedDelegateStub.calledOnce).to.be.true
+      expect(getVotesStub.calledOnce).to.be.true
+      expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: alice, votingPower: '100', lastVPBlockNumber: 12 },
+      ])
+    })
+
+    describe('look-alike tokens', () => {
+      // an attacker token that reports the victim's sources, and reverts as soon as it is read
+      beforeEach(() => {
+        ;(Models.Token.find as SinonStub).resolves([{ address: lookAlike }, { address: token }])
+        distinctStub.resolves([lookAlike, token])
+        getVotesStub.callsFake(async (tokenAddress, _n, account) => {
+          if (tokenAddress === lookAlike) throw new Error('execution reverted')
+          return account === alice ? 100n : 5n
+        })
+      })
+
+      it('should keep refreshing the healthy token when a token reporting its sources reverts', async () => {
+        const { parsedEvent, info } = event('DelegateVotesChanged', { delegate: bob }, votesSource)
+
+        await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
+
+        expect(updateVotingPowerStub.calledOnce).to.be.true
+        expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+          { memberAddress: bob, votingPower: '5', lastVPBlockNumber: 10 },
+        ])
+      })
+
+      it('should skip a token whose sources cannot be read', async () => {
+        ;(GovernanceBondedVotesHelper.getSources as SinonStub).callsFake(async (tokenAddress: string) => {
+          if (tokenAddress === lookAlike) throw new Error('execution reverted')
+          return { checkpoints, votesSource, escrow }
+        })
+        const { parsedEvent, info } = event('BondedCheckpointed', { bondOwner: alice }, checkpoints)
+
+        await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
+
+        expect(updateVotingPowerStub.calledOnce).to.be.true
+      })
+
+      it('should not read the sources of tokens no installed supported plugin uses', async () => {
+        distinctStub.resolves([token])
+        const { parsedEvent, info } = event('BondedCheckpointed', { bondOwner: alice }, checkpoints)
+
+        await GovernanceBondedVotesHandler.votingPowerChanged(parsedEvent, info)
+
+        const read = (GovernanceBondedVotesHelper.getSources as SinonStub).getCalls().map(call => call.args[0])
+        expect(read).to.deep.equal([token])
+        expect(distinctStub.firstCall.args[1]).to.deep.include({ status: IPluginStatus.installed, isSupported: true })
+      })
+
+      it('should refresh only its own token when the handlers are bound to one', async () => {
+        const handlers = GovernanceBondedVotesHandler.forToken(token)
+        const { parsedEvent, info } = event('DelegateVotesChanged', { delegate: bob }, votesSource)
+
+        await handlers.votingPowerChanged(parsedEvent, info)
+
+        expect(getVotesStub.getCalls().map(call => call.args[0])).to.deep.equal([token])
+        expect((GovernanceBondedVotesHelper.getSources as SinonStub).called).to.be.false
+        expect(updateVotingPowerStub.calledOnce).to.be.true
+      })
+
+      it('should rethrow when the bound token cannot be read, so its crawl stops and retries', async () => {
+        const handlers = GovernanceBondedVotesHandler.forToken(lookAlike)
+        const { parsedEvent, info } = event('DelegateVotesChanged', { delegate: bob }, votesSource)
+
+        let error: Error | undefined
+        try {
+          await handlers.votingPowerChanged(parsedEvent, info)
+        } catch (err) {
+          error = err as Error
+        }
+
+        expect(error?.message).to.equal('execution reverted')
+        expect(updateVotingPowerStub.called).to.be.false
+      })
     })
   })
 })

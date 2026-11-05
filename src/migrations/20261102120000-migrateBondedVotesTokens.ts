@@ -18,8 +18,15 @@ export const findBondedVotesTokens = async (): Promise<Token[]> => {
 
   const tokens: Token[] = []
   for (const token of candidates) {
-    const { type } = await TokenDetector.detectTokenType(token.address, token.network)
-    if (type === ITokenType.bondedVotes) tokens.push(token)
+    try {
+      const { type } = await TokenDetector.detectTokenType(token.address, token.network)
+      if (type === ITokenType.bondedVotes) tokens.push(token)
+    } catch (error) {
+      logger.error(
+        'Cannot detect token type, skipping',
+        llo({ migration: MIGRATION, tokenAddress: token.address, error }),
+      )
+    }
   }
 
   return tokens
@@ -29,6 +36,7 @@ export const migrateBondedVotesToken = async (token: Token): Promise<void> => {
   const { address, network } = token
 
   await Models.Token.updateOne({ id: token.id }, { type: ITokenType.bondedVotes })
+  // absent votingEscrow is null on a plugin and unset on a setting, as the schemas default it
   await Models.Plugin.updateMany({ tokenAddress: address, network }, { votingEscrow: null })
   await Models.Setting.updateMany({ tokenAddress: address, network }, { $unset: { votingEscrow: 1 } })
   await Models.Lock.deleteMany({ tokenAddress: address, network })
@@ -37,7 +45,7 @@ export const migrateBondedVotesToken = async (token: Token): Promise<void> => {
   const plugins = await Models.Plugin.find({ tokenAddress: address, network, status: IPluginStatus.installed })
   for (const plugin of plugins) {
     await RabbitMQHelper.sendMessage(EnumQueueName.plugins, {
-      id: plugin.address,
+      id: `${network}-${plugin.address}`,
       params: { address: plugin.address, network },
     })
   }
@@ -50,15 +58,27 @@ export const migrateBondedVotesTokensMigration: IMigration = {
     try {
       const tokens = await findBondedVotesTokens()
 
+      let migrated = 0
       for (const token of tokens) {
-        await migrateBondedVotesToken(token)
-        logger.verbose(
-          'Migrated BondedVotes token',
-          llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network }),
-        )
+        try {
+          await migrateBondedVotesToken(token)
+          migrated++
+          logger.verbose(
+            'Migrated BondedVotes token',
+            llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network }),
+          )
+        } catch (error) {
+          logger.error(
+            'Cannot migrate BondedVotes token, skipping',
+            llo({ migration: MIGRATION, tokenAddress: token.address, network: token.network, error }),
+          )
+        }
       }
 
-      logger.info('Migration completed successfully', llo({ migration: MIGRATION, migrated: tokens.length }))
+      logger.info(
+        'Migration completed successfully',
+        llo({ migration: MIGRATION, migrated, skipped: tokens.length - migrated }),
+      )
     } catch (error) {
       logger.error('Migration failed', llo({ migration: MIGRATION, error }))
       throw error
