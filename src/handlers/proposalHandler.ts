@@ -1,5 +1,6 @@
 import { Models } from '@dbModels'
 import { assert } from '@errors'
+import { CrispInterfoldHandler } from '@handlers/crispInterfoldHandler'
 import { DaoRegistryHandler } from '@handlers/daoRegistryHandler'
 import { PluginSettingHandler } from '@handlers/pluginSettingHandler'
 import DecodeActions from '@helpers/decodeAction'
@@ -91,6 +92,7 @@ export const ProposalHandler = {
           minParticipation: settings?.minParticipation,
           minDuration: settings?.minDuration,
           minProposerVotingPower: settings?.minProposerVotingPower,
+          minVoterVotingPower: settings?.minVoterVotingPower, // crisp
           stages: settings?.stages?.toObject(), // spp settings
         }
       }
@@ -219,6 +221,20 @@ export const ProposalHandler = {
         )
         document.snapshot = {
           totalSupply: '0',
+        }
+      }
+
+      if (relatedPlugin.interfaceType === IPluginInterfaceType.crisp) {
+        // the frozen parameters and the round of the proposal, read from the contract; the tally comes later
+        const crisp = await CrispInterfoldHandler.readProposalData(relatedPlugin, proposalIndex, info.network)
+        if (crisp) {
+          document.e3Id = crisp.e3Id
+          document.isTallyPublished = false
+          document.votingPowerDivisor = crisp.votingPowerDivisor
+          document.settings = { ...document.settings, ...crisp.settings } as Proposal['settings']
+          if (crisp.historicalTotalSupply !== undefined) {
+            document.snapshot = { totalSupply: crisp.historicalTotalSupply }
+          }
         }
       }
 
@@ -660,6 +676,10 @@ export const ProposalHandler = {
       } catch (error) {
         logger.error('Error self-healing execution link', llo({ ...info, error }))
       }
+
+      // the tally the plugin stores at execution is final
+      const plugin = await Models.Plugin.findByAddress(info.address, info.network)
+      if (plugin?.interfaceType === IPluginInterfaceType.crisp) await CrispInterfoldHandler.syncTally(proposal, plugin)
 
       const hashDaoUpgradeAction = proposal.rawActions?.find((action: IRawAction) => {
         const methodHash = Web3Utils.getFunctionSelector(KnownActionSignature.UpgradeToAndCall)

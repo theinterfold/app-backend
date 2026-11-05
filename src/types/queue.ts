@@ -34,6 +34,7 @@ export enum EnumQueueName {
   governanceRewardDistribution = 'governance.rewardDistribution',
   tokenTotalSupply = 'token.totalSupply',
   syncDelegateChanged = 'sync.delegate.changed',
+  logInterfold = 'log.interfold',
   telegramNotifications = 'telegram.notifications',
   telegramNotificationsDeadLetter = 'telegram.notifications.dead',
   eventReplay = 'event.replay',
@@ -279,6 +280,10 @@ export interface IQueueContractDecoderLight {
     data: string
     value: string | number
   }>
+  network: NetworksEnum
+}
+
+export interface IQueueLogInterfold {
   network: NetworksEnum
 }
 

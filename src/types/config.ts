@@ -279,6 +279,9 @@ export interface IConfig {
       PLUGIN_INTERVAL: number
       SYNC_ALL: boolean
     }
+    ARAGON_PLUGINS: {
+      CRISP_ROUND_SWEEP_INTERVAL: number
+    }
     ARAGON_RATES: {
       NAME: string
       RATES_INTERVAL: number
