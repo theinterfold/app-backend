@@ -9,10 +9,10 @@ const MIGRATION = '20261104120000-reindexBondedVotesMembers'
 const llo = logger.logMeta.bind(null, { service: `Migration: ${MIGRATION}` })
 
 /**
- * The BondedVotes crawl used to start at the token's block, or the plugin's when that is unknown. The
- * votes source it wraps, and the escrow behind it, are deployed earlier and hold the delegations and
- * locks, so their holders never became members. The crawl now starts at the first block of every contract
- * it reads: drop its progress and sync the plugins again from there.
+ * The votes source a BondedVotes token wraps, and the escrow behind it, are deployed before the token and hold the
+ * delegations and locks, so a crawl starting at the token's block (or the plugin's) never made their holders
+ * members. The crawl starts at the first block of every contract it reads: drop its progress and sync the plugins
+ * again from there.
  */
 export const reindexBondedVotesToken = async (token: Token): Promise<void> => {
   const { address, network } = token

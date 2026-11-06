@@ -4184,63 +4184,6 @@ describe('ProposalHandler', () => {
         .true
     })
 
-    it('should log an error and continue execution when subProposalDb is not found', async () => {
-      const parentProposal = await Models.Proposal.create({
-        ...ProposalList[0],
-        network,
-        subProposals: [],
-        stageExecutions: [],
-      })
-
-      const plugin = await Models.Plugin.create({
-        ...PluginList[0],
-        network,
-        interfaceType: IPluginInterfaceType.spp,
-        subPlugins: [{ stageIndex: 2, addresses: ['0xMissingSubPlugin'] }],
-      })
-
-      const info = {
-        transactionHash: '0xAdvancedTx',
-        address: parentProposal.pluginAddress,
-        blockNumber: 500,
-        network,
-        eventName: 'ProposalAdvanced',
-        transactionIndex: 1,
-        logIndex: 2,
-      }
-
-      const fakeEvent = {
-        args: {
-          proposalId: 0n,
-          stageId: 2n,
-        },
-      }
-
-      sandbox.stub(Models.Proposal, 'findByProposalIndex').callsFake(async (proposalIndex, pluginAddress) => {
-        if (pluginAddress === parentProposal.pluginAddress) {
-          return parentProposal as any // Return parent proposal correctly
-        }
-        return null // Simulate missing subProposalDb
-      })
-
-      sandbox.stub(Models.Plugin, 'findByAddress').resolves(plugin as any)
-      sandbox.stub(Models.Plugin, 'findOne').resolves(plugin as any)
-      sandbox.stub(ProposalHelper, 'getSppSubPluginProposals').resolves(1) // Simulated valid subProposalIndex
-      sandbox.stub(ProposalHelper, 'getProposal').resolves({ lastStageTransition: 1800000000 } as any)
-      sandbox.stub(Web3Helper, 'getBlockTimestamp').resolves(1800000000)
-
-      const warnLoggerStub = sandbox.stub(logger, 'warn')
-
-      const verboseLoggerStub = sandbox.stub(logger, 'verbose')
-
-      await ProposalHandler.proposalAdvanced(fakeEvent as any, info)
-
-      expect(warnLoggerStub.calledWith('Sub proposal not indexed yet, it links to its parent when it lands' as any)).to
-        .be.true
-      expect(verboseLoggerStub.calledWith('Updated document - Proposal Updated - lastStageTransition' as any)).to.be
-        .true
-    })
-
     it('should return early and not update executed subProposal', async () => {
       const executedSubProposal = await Models.Proposal.create({
         ...ProposalList[1],

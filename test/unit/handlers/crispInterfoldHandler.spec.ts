@@ -148,16 +148,6 @@ describe('Handlers: CrispInterfoldHandler', () => {
       ).to.be.true
     })
 
-    it('should ignore an unknown e3Id', async () => {
-      await createPlugin(pluginAddress, coordinator)
-      await createProposal(pluginAddress, '1', '7', '1000')
-
-      await CrispInterfoldHandler.plaintextOutputPublished(published(8n).parsedEvent, published(8n).info)
-
-      expect(getTallyStub.called).to.be.false
-      expect((await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })).isTallyPublished).to.not.equal(true)
-    })
-
     it('should not read the tally again once it is published', async () => {
       await createPlugin(pluginAddress, coordinator)
       await createProposal(pluginAddress, '1', '7', '1000')

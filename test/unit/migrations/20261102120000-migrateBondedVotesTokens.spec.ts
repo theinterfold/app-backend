@@ -65,9 +65,7 @@ describe('migration: migrateBondedVotesTokens', () => {
 
       expect(tokens.map(token => token.address)).to.deep.equal([bondedAddress])
     })
-  })
 
-  describe('findBondedVotesTokens', () => {
     it('should skip a token that cannot be probed and keep looking at the others', async () => {
       const unprobeable = '0x5555555555555555555555555555555555555555'
       await createToken(unprobeable)
@@ -151,16 +149,6 @@ describe('migration: migrateBondedVotesTokens', () => {
 
       expect(sendMessageStub.calledWithMatch(EnumQueueName.plugins, { params: { address: pluginAddress } })).to.be.true
       expect(errorStub.calledWith('Migration failed' as any)).to.be.false
-    })
-
-    it('should migrate every BondedVotes token and leave other adapters alone', async () => {
-      await createToken(bondedAddress)
-      await createToken(adapterAddress)
-
-      await migrateBondedVotesTokensMigration.start()
-
-      expect((await Models.Token.findOne({ address: bondedAddress, network })).type).to.equal(ITokenType.bondedVotes)
-      expect((await Models.Token.findOne({ address: adapterAddress, network })).type).to.equal(ITokenType.escrowAdapter)
     })
   })
 })

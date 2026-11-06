@@ -10,8 +10,9 @@ const MIGRATION = '20261105120000-backfillCrispProposals'
 const llo = logger.logMeta.bind(null, { service: `Migration: ${MIGRATION}` })
 
 // CRISP proposals indexed before the indexer read the round of a proposal have none of it: give them what
-// ProposalCreated stores now, and the final tally of those already executed. The tally of the others comes with the
-// Interfold crawl queued afterwards. A proposal is selected by its missing e3Id, so a re-run resumes where it stopped.
+// ProposalCreated stores for a CRISP proposal, and the final tally of those already executed. The tally of the others
+// comes with the Interfold crawl queued afterwards. A proposal is selected by its missing e3Id, so a re-run resumes
+// where it stopped.
 export const backfillCrispProposal = async (proposal: Proposal, plugin: Plugin): Promise<boolean> => {
   const { network, proposalIndex } = proposal
   const data = await CrispInterfoldHandler.readProposalData(plugin, proposalIndex, network)

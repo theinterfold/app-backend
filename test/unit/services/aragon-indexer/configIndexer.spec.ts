@@ -152,8 +152,7 @@ describe('ConfigIndexer', () => {
         expect(config!.config[0].abi).to.equal(Multisig.abi)
       })
 
-      // Test VotingSettingsUpdated has the TokenVoting, LockToVote and CrispVoting ABIs. The
-      // three share an event name but not a signature, so each needs its own decoding ABI.
+      // Test VotingSettingsUpdated has the TokenVoting, LockToVote and CrispVoting ABIs
       const votingSettingsConfig = ConfigIndexer.find(c => c.event === 'VotingSettingsUpdated')
       expect(votingSettingsConfig).to.exist
       expect(votingSettingsConfig!.config.length).to.equal(3)
@@ -168,8 +167,8 @@ describe('ConfigIndexer', () => {
     })
 
     it('should subscribe to the deployed CrispVoting event signatures', () => {
-      // The topic is keccak256 of the canonical signature, so an ABI that drifts from the deployed
-      // contract silently subscribes to a topic no plugin emits.
+      // The topic is keccak256 of the signature, so an ABI that drifts from the deployed contract
+      // subscribes to a topic nothing emits.
       const votingSettingsTopic = id('VotingSettingsUpdated(uint256,uint256,uint32,uint32,uint64)')
       const votingSettingsConfig = ConfigIndexer.find(c => c.event === 'VotingSettingsUpdated')
       expect(votingSettingsConfig!.topic).to.include(votingSettingsTopic)
