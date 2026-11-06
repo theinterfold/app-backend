@@ -13,7 +13,7 @@ const abi = [
   'function bondedDelegate(address) view returns (address)',
 ]
 
-export interface IBondedVotesSources {
+interface IBondedVotesSources {
   checkpoints: HexAddress
   votesSource: HexAddress
   // the escrow behind an escrow votes source, null when the token votes for itself

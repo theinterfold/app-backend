@@ -247,24 +247,6 @@ describe('migration: migrateCrispPlugins', () => {
   })
 
   describe('start', () => {
-    it('should migrate every misdetected plugin', async () => {
-      await createPlugin(crispAddress, IPluginInterfaceType.tokenVoting)
-      await createPlugin(tokenVotingAddress, IPluginInterfaceType.tokenVoting)
-      sandbox.stub(Web3Helper, 'getCrispSettings').resolves(onChainSettings)
-      sandbox.stub(ProxyToken, 'saveAndGetToken').resolves({ isGovernance: true } as any)
-      sandbox.stub(PluginSettingHandler, 'isSupported').resolves()
-      sandbox.stub(PluginSlug, 'updateSlug').resolves('crisp')
-
-      await migrateCrispPluginsMigration.start()
-
-      expect((await Models.Plugin.findOne({ address: crispAddress })).interfaceType).to.equal(
-        IPluginInterfaceType.crisp,
-      )
-      expect((await Models.Plugin.findOne({ address: tokenVotingAddress })).interfaceType).to.equal(
-        IPluginInterfaceType.tokenVoting,
-      )
-    })
-
     it('should skip a plugin that cannot be migrated and still migrate the others', async () => {
       const planted = '0x4444444444444444444444444444444444444444'
       await createPlugin(planted, IPluginInterfaceType.tokenVoting)

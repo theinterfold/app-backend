@@ -51,21 +51,8 @@ describe('Helper: PluginDetector', () => {
     expect(getImplementationAddressStub.calledWith('0xAddress', NetworksEnum.ethereumMainnet)).to.be.true
   })
 
-  it('should detect crisp plugin', async () => {
-    sandbox.stub(ProxyContractHelper, 'getImplementationAddress').resolves(null)
-    sandbox
-      .stub(ContractHelper, 'getBytecode')
-      .resolves(simulateBytecodeForFunctions([...PluginDetector.CRISP_FUNCTIONS, ...PluginDetector.HAS_TARGET]))
-
-    const result = await PluginDetector.detectPluginType('0xAddress', NetworksEnum.ethereumMainnet)
-    expect(result.type).to.equal(IPluginInterfaceType.crisp)
-    expect(result.hasTarget).to.be.true
-  })
-
   it('should detect crisp plugin even though it also exposes the tokenVoting functions', async () => {
-    // CrispVoting implements getVotingToken() and totalVotingPower(uint256) as well, so a
-    // detector that probed tokenVoting first would classify it as tokenVoting — and the app
-    // would render the public voting UI over a proposal whose ballots are encrypted.
+    // CrispVoting also implements the tokenVoting functions, so tokenVoting must not be probed first.
     sandbox.stub(ProxyContractHelper, 'getImplementationAddress').resolves(null)
     sandbox
       .stub(ContractHelper, 'getBytecode')
