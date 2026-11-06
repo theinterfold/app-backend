@@ -9,9 +9,9 @@ const MIGRATION = '20261102120000-migrateBondedVotesTokens'
 const llo = logger.logMeta.bind(null, { service: `Migration: ${MIGRATION}` })
 
 /**
- * BondedVotes also exposes escrow() and clock(), so it used to be stored as an escrow adapter and the
- * escrow behind it indexed as the voting power source. BondedVotes adds bonded weight on top, which that
- * missed, and its members come from its own events now.
+ * BondedVotes also exposes escrow() and clock(), so it was detected as an escrow adapter and the escrow behind it
+ * indexed as the voting power source. That missed the bonded weight: the members of a BondedVotes token come from
+ * its own events.
  */
 export const findBondedVotesTokens = async (): Promise<Token[]> => {
   const candidates: Token[] = await Models.Token.find({ type: ITokenType.escrowAdapter })
