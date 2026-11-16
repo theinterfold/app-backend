@@ -1,13 +1,17 @@
+import { Models } from '@dbModels'
 import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
+import RabbitMQHelper from '@helpers/rabbitMQ'
 import Web3Helper from '@helpers/web3'
 import logger from '@logger'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import { LogTokenVoting } from '@plugins/logTokenVoting'
 import {
+  EnumQueueName,
   IBondedVotesLogs,
   IGovernanceErc20Logs,
   IPluginInterfaceType,
+  IPluginStatus,
   ITokenType,
   IVotingEscrowAdapterLogs,
   IVotingEscrowIncreasingLogs,
@@ -894,13 +898,16 @@ describe('AragonPlugins: LogTokenVoting', () => {
       tokenAddress: token.address,
       network: token.network,
       blockNumber: 100,
+      status: IPluginStatus.installed,
     } as any
     const sources = { checkpoints: '0xCheckpoints', votesSource: '0xVotesSource', escrow: '0xEscrow' }
     const startBlock = 20
+    let sendDelayedMessageStub: sinon.SinonStub
 
     beforeEach(() => {
       sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves(sources)
       sandbox.stub(GovernanceBondedVotesHelper, 'getStartBlock').resolves(startBlock)
+      sendDelayedMessageStub = sandbox.stub(RabbitMQHelper, 'sendDelayedMessage').resolves()
     })
 
     it('should crawl the BondedVotes events from the token, checkpoints, votes source and escrow', async () => {
@@ -914,6 +921,8 @@ describe('AragonPlugins: LogTokenVoting', () => {
         IBondedVotesLogs.BondedCheckpointed,
         IGovernanceErc20Logs.DelegateVotesChanged,
         IVotingEscrowAdapterLogs.DelegateChanged,
+        IVotingEscrowAdapterLogs.TokensDelegated,
+        IVotingEscrowAdapterLogs.TokensUndelegated,
         IVotingEscrowIncreasingLogs.Deposit,
         IVotingEscrowIncreasingLogs.Withdraw,
       ])
@@ -925,6 +934,19 @@ describe('AragonPlugins: LogTokenVoting', () => {
       expect((crawler as any).crawlParams.fromBlock).to.equal(startBlock)
       expect(startBlock).to.be.lessThan(token.blockNumber)
       expect(startBlock).to.be.lessThan(plugin.blockNumber)
+    })
+
+    it('should not look for the first block of the contracts once the crawl has progress', async () => {
+      await Models.ConfigIndexer.create({
+        network: token.network,
+        service: `${ITokenType.bondedVotes}-${token.network}-${token.address}` as any,
+        lastSync: 1000,
+      })
+
+      const crawler = await LogTokenVoting.buildBondedVotesCrawler(plugin, token)
+
+      expect((GovernanceBondedVotesHelper.getStartBlock as sinon.SinonStub).called).to.be.false
+      expect(await (crawler as any).getServiceStartBlock()).to.deep.equal({ block: 1000, isExisting: true })
     })
 
     it('should refresh voting power through handlers bound to the token, never the global ones', async () => {
@@ -953,30 +975,140 @@ describe('AragonPlugins: LogTokenVoting', () => {
       expect((crawler as any).crawlParams.address).to.deep.equal([token.address, '0xCheckpoints'])
     })
 
-    it('should still sync the plugin when the bonded crawler cannot be built', async () => {
+    it('should still sync the plugin, and queue it again, when the bonded crawler cannot be built', async () => {
       ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).rejects(new Error('execution reverted'))
       const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
       const endStub = sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
       sandbox.stub(logger, 'verbose')
-      const errorStub = sandbox.stub(logger, 'error')
+      const warnStub = sandbox.stub(logger, 'warn')
 
       await LogTokenVoting.start(plugin, token)
 
       expect(crawlStub.calledOnce).to.be.true
       expect(endStub.calledOnce).to.be.true
-      expect(errorStub.calledOnce).to.be.true
+      expect(warnStub.calledOnce).to.be.true
+      expect(sendDelayedMessageStub.calledOnce).to.be.true
+      const [queueName, payload, delayMs] = sendDelayedMessageStub.firstCall.args
+      expect(queueName).to.equal(EnumQueueName.plugins)
+      expect(payload).to.deep.equal({
+        id: `${plugin.network}-${plugin.address}`,
+        params: { address: plugin.address, network: plugin.network, isHistorical: undefined, attempt: 1 },
+      })
+      expect(delayMs).to.equal(60_000)
     })
 
-    it('should still sync the plugin when the first block of the contracts cannot be found', async () => {
+    describe('retrying a build that keeps failing', () => {
+      let errorStub: sinon.SinonStub
+
+      beforeEach(() => {
+        ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).rejects(new Error('execution reverted'))
+        sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+        sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+        sandbox.stub(logger, 'verbose')
+        sandbox.stub(logger, 'warn')
+        errorStub = sandbox.stub(logger, 'error')
+      })
+
+      const retryDelays = async (attempts: number[]) => {
+        const delays: number[] = []
+        for (const attempt of attempts) {
+          sendDelayedMessageStub.resetHistory()
+          await LogTokenVoting.start(plugin, token, undefined, attempt)
+          delays.push(sendDelayedMessageStub.firstCall.args[2])
+        }
+        return delays
+      }
+
+      it('should carry the next attempt and double the delay each time', async () => {
+        expect(await retryDelays([0, 1, 2])).to.deep.equal([60_000, 120_000, 240_000])
+
+        await LogTokenVoting.start(plugin, token, undefined, 2)
+        expect(sendDelayedMessageStub.firstCall.args[1].params.attempt).to.equal(3)
+      })
+
+      it('should cap the delay', async () => {
+        const [delay] = await retryDelays([7])
+
+        expect(delay).to.equal(30 * 60 * 1000)
+      })
+
+      it('should give up, and log an error, after the last retry', async () => {
+        await retryDelays([7])
+        sendDelayedMessageStub.resetHistory()
+        errorStub.resetHistory()
+
+        await LogTokenVoting.start(plugin, token, undefined, 8)
+
+        expect(sendDelayedMessageStub.called).to.be.false
+        expect(errorStub.calledOnce).to.be.true
+        expect(errorStub.firstCall.args[0]).to.include('giving up')
+      })
+
+      it('should not retry for a plugin that is no longer installed', async () => {
+        await LogTokenVoting.start({ ...plugin, status: IPluginStatus.uninstalled }, token, undefined, 0)
+
+        expect(sendDelayedMessageStub.called).to.be.false
+      })
+    })
+
+    describe('when the retry is queued', () => {
+      let steps: string[]
+
+      beforeEach(() => {
+        ;(GovernanceBondedVotesHelper.getSources as sinon.SinonStub).rejects(new Error('execution reverted'))
+        sandbox.stub(logger, 'verbose')
+        sandbox.stub(logger, 'warn')
+        steps = []
+        sendDelayedMessageStub.callsFake(async () => {
+          steps.push('retry')
+        })
+        sandbox.stub(BlockchainLogCrawler.prototype, 'end').callsFake(async () => {
+          steps.push('end')
+        })
+      })
+
+      it('should only queue the retry after the crawls have finished, or it can arrive as a duplicate of this job', async () => {
+        sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').callsFake(async () => {
+          steps.push('crawl')
+          return []
+        })
+
+        await LogTokenVoting.start(plugin, token)
+
+        expect(steps).to.deep.equal(['crawl', 'end', 'retry'])
+      })
+
+      it('should not queue the retry when the plugin crawl fails, as it would be dropped as a duplicate of this job', async () => {
+        sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').rejects(new Error('rpc down'))
+
+        await expect(LogTokenVoting.start(plugin, token)).to.be.rejectedWith('rpc down')
+
+        expect(steps).to.deep.equal([])
+      })
+    })
+
+    it('should still sync the plugin, and queue it again, when the first block of the contracts cannot be found', async () => {
       ;(GovernanceBondedVotesHelper.getStartBlock as sinon.SinonStub).rejects(new Error('No contract code'))
       const crawlStub = sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
       sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
       sandbox.stub(logger, 'verbose')
-      sandbox.stub(logger, 'error')
+      sandbox.stub(logger, 'warn')
+
+      await LogTokenVoting.start(plugin, token, true)
+
+      expect(crawlStub.calledOnce).to.be.true
+      expect(sendDelayedMessageStub.calledOnce).to.be.true
+      expect(sendDelayedMessageStub.firstCall.args[1].params.isHistorical).to.be.true
+    })
+
+    it('should not queue the plugin again when the bonded crawler is built', async () => {
+      sandbox.stub(BlockchainLogCrawler.prototype, 'crawl').resolves()
+      sandbox.stub(BlockchainLogCrawler.prototype, 'end').resolves()
+      sandbox.stub(logger, 'verbose')
 
       await LogTokenVoting.start(plugin, token)
 
-      expect(crawlStub.calledOnce).to.be.true
+      expect(sendDelayedMessageStub.called).to.be.false
     })
 
     it('should crawl the plugin and the token', async () => {

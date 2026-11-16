@@ -1,3 +1,5 @@
+import { GovernanceERC20 } from '@artifacts/GovernanceERC20'
+import { VotingEscrow } from '@artifacts/VotingEscrow'
 import { Models } from '@dbModels'
 import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
@@ -6,6 +8,7 @@ import logger from '@logger'
 import { Erc20Governance } from '@src/governance/erc20Governance'
 import { IPluginStatus, NetworksEnum } from '@types'
 import { expect } from 'chai'
+import { Interface, type Log } from 'ethers'
 import * as sinon from 'sinon'
 import { SinonSandbox, SinonStub } from 'sinon'
 
@@ -281,6 +284,77 @@ describe('Handlers: GovernanceBondedVotesHandler', () => {
         expect(error?.message).to.equal('execution reverted')
         expect(updateVotingPowerStub.called).to.be.false
       })
+    })
+  })
+
+  describe('processSourceLogs', () => {
+    const logOf = (iface: Interface, name: string, args: unknown[], address: string, blockNumber = 10) => {
+      const { topics, data } = iface.encodeEventLog(name, args)
+      return {
+        topics,
+        data,
+        address,
+        blockNumber,
+        transactionIndex: 1,
+        index: 2,
+        transactionHash: `0x${'ab'.repeat(32)}`,
+      } as unknown as Log
+    }
+    const adapterInterface = new Interface(VotingEscrow.abi)
+    const erc20Interface = new Interface(GovernanceERC20.abi)
+
+    it('should refresh the delegatee of a lock as well as its owner on the adapter TokensDelegated', async () => {
+      // an auto-delegated lock creation or transfer emits no DelegateChanged, only this
+      const log = logOf(adapterInterface, 'TokensDelegated', [alice, bob, [1n]], votesSource)
+
+      const handled = await GovernanceBondedVotesHandler.processSourceLogs([log], network)
+
+      expect(handled).to.equal(1)
+      expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: alice, votingPower: '100', lastVPBlockNumber: 10 },
+        { memberAddress: bob, votingPower: '5', lastVPBlockNumber: 10 },
+      ])
+    })
+
+    it('should refresh the delegatee of a lock as well as its owner on the adapter TokensUndelegated', async () => {
+      const log = logOf(adapterInterface, 'TokensUndelegated', [alice, carol, [1n]], votesSource, 12)
+
+      await GovernanceBondedVotesHandler.processSourceLogs([log], network)
+
+      expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: alice, votingPower: '100', lastVPBlockNumber: 12 },
+        { memberAddress: carol, votingPower: '5', lastVPBlockNumber: 12 },
+      ])
+    })
+
+    it('should refresh the delegate of a votes source DelegateVotesChanged, parsed from the raw log', async () => {
+      const log = logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 5n], votesSource)
+
+      await GovernanceBondedVotesHandler.processSourceLogs([log], network)
+
+      expect(updateVotingPowerStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: bob, votingPower: '5', lastVPBlockNumber: 10 },
+      ])
+      expect(updatePluginMetricsStub.firstCall.args[0]).to.deep.equal([
+        { memberAddress: bob, pluginAddress: plugin.address, daoAddress: plugin.daoAddress, lastActivity: 10 },
+      ])
+    })
+
+    it('should not refresh anything for a source of no installed BondedVotes token', async () => {
+      const log = logOf(adapterInterface, 'TokensDelegated', [alice, bob, [1n]], lookAlike)
+
+      await GovernanceBondedVotesHandler.processSourceLogs([log], network)
+
+      expect(updateVotingPowerStub.called).to.be.false
+    })
+
+    it('should skip logs that are not events of a votes source', async () => {
+      const log = { topics: [`0x${'11'.repeat(32)}`], data: '0x', address: votesSource } as unknown as Log
+
+      const handled = await GovernanceBondedVotesHandler.processSourceLogs([log], network)
+
+      expect(handled).to.equal(0)
+      expect(updateVotingPowerStub.called).to.be.false
     })
   })
 })

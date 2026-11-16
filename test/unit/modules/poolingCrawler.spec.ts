@@ -1,20 +1,27 @@
 import { DAO } from '@artifacts/dao'
 import { GovernanceERC20 } from '@artifacts/GovernanceERC20'
 import { SafeNativeEvents } from '@artifacts/Safe'
+import { VotingEscrow } from '@artifacts/VotingEscrow'
+import { VotingEscrowIncreasing } from '@artifacts/VotingEscrowIncreasing'
 import { Models } from '@dbModels'
 import { DaoRegistryHandler } from '@handlers/daoRegistryHandler'
+import { GovernanceVeBatchHandler } from '@handlers/governanceVeBatchHandler'
+import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
 import RabbitMQHelper from '@helpers/rabbitMQ'
 import utils from '@helpers/utils'
 import logger from '@logger'
+import type Plugin from '@models/schema/plugin'
+import BondedVotesSourceCache from '@modules/bondedVotesSourceCache'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import DaoAddressCache from '@modules/daoAddressCache'
 import PoolingCrawler from '@modules/poolingCrawler'
 import SafeTrackingModule from '@modules/safe/safeTracking'
 import TokenEligibilityCache from '@modules/tokenEligibilityCache'
+import { Erc20Governance } from '@src/governance/erc20Governance'
 import { DaoList } from '@test/mock/fakeDao'
 import { PluginList } from '@test/mock/fakePlugins'
 import { FakeToken } from '@test/mock/fakeToken'
-import { EnumQueueName, ICrawStrategy, IPluginInterfaceType, ITokenType, NetworksEnum } from '@types'
+import { EnumQueueName, ICrawStrategy, IPluginInterfaceType, IPluginStatus, ITokenType, NetworksEnum } from '@types'
 import { expect } from 'chai'
 import { ethers, Interface, type Log } from 'ethers'
 import * as sinon from 'sinon'
@@ -31,6 +38,7 @@ describe('Module: PoolingCrawler', () => {
     sandbox.stub(logger, 'warn')
     DaoAddressCache.clear()
     TokenEligibilityCache.clear()
+    BondedVotesSourceCache.clear()
   })
 
   afterEach(() => {
@@ -38,6 +46,7 @@ describe('Module: PoolingCrawler', () => {
     PoolingCrawler.instances.clear()
     DaoAddressCache.clear()
     TokenEligibilityCache.clear()
+    BondedVotesSourceCache.clear()
   })
 
   describe('start', () => {
@@ -270,6 +279,8 @@ describe('Module: PoolingCrawler', () => {
       sandbox.stub(Models.Dao, 'distinct').resolves([])
       sandbox.stub(Models.Plugin, 'distinct').resolves([tokenAddress1]) // Only tokenAddress1 is valid
       sandbox.stub(Models.Token, 'distinct').resolves([tokenAddress1]) // Only tokenAddress1 is valid
+      // the stubbed lookups also list tokenAddress1 as a BondedVotes token: its sources must not be read over RPC
+      sandbox.stub(GovernanceBondedVotesHelper, 'getSources').rejects(new Error('not a BondedVotes token'))
 
       const result = await PoolingCrawler.filterLogs(mockLogs as any, NetworksEnum.ethereumMainnet)
 
@@ -290,6 +301,158 @@ describe('Module: PoolingCrawler', () => {
       expect(loggerStub.calledOnce).to.be.true
       expect(loggerStub.firstCall.args[0]).to.equal('PoolingCrawler filterLogs')
       expect(result).to.equal(mockLogs)
+    })
+  })
+
+  describe('BondedVotes sources', () => {
+    const network = NetworksEnum.ethereumMainnet
+    const bondedToken = ethers.getAddress('0x4444444444444444444444444444444444444444')
+    const checkpoints = ethers.getAddress('0x5555555555555555555555555555555555555555')
+    const votesSource = ethers.getAddress('0x6666666666666666666666666666666666666666')
+    const escrow = ethers.getAddress('0x8888888888888888888888888888888888888888')
+    const unrelated = ethers.getAddress('0x9999999999999999999999999999999999999999')
+    const alice = ethers.getAddress('0x1111111111111111111111111111111111111111')
+    const bob = ethers.getAddress('0x2222222222222222222222222222222222222222')
+    const { createdAt: _pc, updatedAt: _pu, ...pluginFixture } = PluginList[0] as Record<string, any>
+    const { createdAt: _tc, updatedAt: _tu, ...tokenFixture } = FakeToken as Record<string, any>
+    const escrowInterface = new Interface(VotingEscrow.abi)
+    const erc20Interface = new Interface(GovernanceERC20.abi)
+
+    let updateVotingPowerStub: sinon.SinonStub
+
+    const logOf = (iface: Interface, name: string, args: unknown[], address: string) => {
+      const { topics, data } = iface.encodeEventLog(name, args)
+      return {
+        topics,
+        data,
+        address,
+        blockNumber: 10,
+        transactionIndex: 1,
+        index: 2,
+        transactionHash: `0x${'ab'.repeat(32)}`,
+      } as unknown as Log
+    }
+
+    const createPlugin = (overrides: Record<string, any> = {}) =>
+      Models.Plugin.create({
+        ...pluginFixture,
+        interfaceType: IPluginInterfaceType.tokenVoting,
+        status: IPluginStatus.installed,
+        isSupported: true,
+        tokenAddress: bondedToken,
+        network,
+        ...overrides,
+      })
+
+    beforeEach(async () => {
+      await Models.Token.create({ ...tokenFixture, address: bondedToken, type: ITokenType.bondedVotes, network })
+      await createPlugin()
+
+      sandbox.stub(GovernanceBondedVotesHelper, 'getSources').resolves({ checkpoints, votesSource, escrow })
+      sandbox.stub(GovernanceBondedVotesHelper, 'getVotes').resolves(7n)
+      sandbox.stub(GovernanceBondedVotesHelper, 'getBondedDelegate').resolves(utils.zeroAddress)
+      sandbox
+        .stub(Erc20Governance.prototype, 'getPlugins')
+        .resolves([{ address: '0xPlugin', daoAddress: '0xDao' }] as unknown as Plugin[])
+      sandbox.stub(Erc20Governance, 'createMembersBatchNoTx').resolves(true)
+      updateVotingPowerStub = sandbox.stub(Erc20Governance.prototype, 'updateTokenMemberVPBatchNoTx').resolves(true)
+      sandbox.stub(Erc20Governance.prototype, 'updatePluginMetricsBatchNoTx').resolves(true)
+      sandbox.stub(Erc20Governance.prototype, 'updateDaoMetrics').resolves()
+    })
+
+    const refreshedAccounts = () =>
+      updateVotingPowerStub.getCalls().flatMap(call => call.args[0].map((u: any) => u.memberAddress))
+
+    it('should refresh the owner and the delegatee on an adapter TokensDelegated, which emits no DelegateChanged', async () => {
+      const logs = [logOf(escrowInterface, 'TokensDelegated', [alice, bob, [1n]], votesSource)]
+
+      await PoolingCrawler.filterLogs(logs, network)
+
+      expect(refreshedAccounts()).to.have.members([alice, bob])
+    })
+
+    it('should refresh the depositor of a lock on an escrow Deposit and Withdraw', async () => {
+      const lockInterface = new Interface(VotingEscrowIncreasing.abi)
+      const lockLog = (name: string, depositor: string) =>
+        logOf(
+          lockInterface,
+          name,
+          lockInterface.getEvent(name)!.inputs.map(input => (input.type === 'address' ? depositor : 1n)),
+          escrow,
+        )
+      const logs = [lockLog('Deposit', alice), lockLog('Withdraw', bob)]
+
+      await PoolingCrawler.filterLogs(logs, network)
+
+      expect(refreshedAccounts()).to.have.members([alice, bob])
+    })
+
+    it('should refresh a votes source DelegateVotesChanged and drop the log when the source is no plugin token', async () => {
+      const logs = [logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 7n], votesSource)]
+
+      const result = await PoolingCrawler.filterLogs(logs, network)
+
+      expect(refreshedAccounts()).to.deep.equal([bob])
+      expect(result).to.have.lengthOf(0)
+    })
+
+    it('should still pass the log on when the votes source is the plugin token of another DAO', async () => {
+      await Models.Token.create({
+        ...tokenFixture,
+        id: 'votes-source-token-id',
+        address: votesSource,
+        type: ITokenType.ERC20,
+        hasDelegate: true,
+        ignoreTransfer: false,
+        network,
+      })
+      await createPlugin({
+        id: 'votes-source-plugin-id',
+        address: '0xBf8dE4316E2778E26b12dad8906467b23BB9A200',
+        transactionHash: '0x6f3e8a941b2140d72e402e35078fd459478222e146aa6d6bd6832d322de5dd00',
+        tokenAddress: votesSource,
+      })
+      const logs = [logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 7n], votesSource)]
+
+      const result = await PoolingCrawler.filterLogs(logs, network)
+
+      expect(refreshedAccounts()).to.deep.equal([bob])
+      expect(result).to.deep.equal(logs)
+    })
+
+    it('should ignore logs of contracts that feed no BondedVotes token', async () => {
+      const logs = [logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 7n], unrelated)]
+
+      await PoolingCrawler.filterLogs(logs, network)
+
+      expect(updateVotingPowerStub.called).to.be.false
+    })
+
+    it('should ignore the sources of a token whose plugin is uninstalled', async () => {
+      await Models.Plugin.updateMany({ tokenAddress: bondedToken }, { status: IPluginStatus.uninstalled })
+      const logs = [logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 7n], votesSource)]
+
+      await PoolingCrawler.filterLogs(logs, network)
+
+      expect(updateVotingPowerStub.called).to.be.false
+    })
+
+    it('should only skip the BondedVotes logs, and still run the other filters, when the source refresh fails', async () => {
+      const processVeStub = sandbox.stub(GovernanceVeBatchHandler, 'processVeEventsBatch').resolves(1)
+      sandbox.stub(BondedVotesSourceCache, 'refresh').rejects(new Error('mongo down'))
+      const errorStub = sandbox.stub(logger, 'error')
+      // not the plugin token of any DAO, so the delegate votes filter drops it, and a VE log the batch handler takes
+      const delegateVotesLog = logOf(erc20Interface, 'DelegateVotesChanged', [bob, 0n, 7n], unrelated)
+      const veLog = logOf(escrowInterface, 'TokensDelegated', [alice, bob, [1n]], votesSource)
+
+      const result = await PoolingCrawler.filterLogs([delegateVotesLog, veLog], network)
+
+      expect(errorStub.calledOnce).to.be.true
+      expect(errorStub.firstCall.args[0]).to.equal('BondedVotes source logs processing failed')
+      expect(updateVotingPowerStub.called).to.be.false
+      expect(processVeStub.calledOnce).to.be.true
+      expect(processVeStub.firstCall.args[0]).to.deep.equal([veLog])
+      expect(result).to.have.lengthOf(0)
     })
   })
 

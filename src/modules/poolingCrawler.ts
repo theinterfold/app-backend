@@ -1,14 +1,16 @@
 import { DAO } from '@artifacts/dao'
 import { GovernanceERC20 } from '@artifacts/GovernanceERC20'
 import { DaoRegistryHandler } from '@handlers/daoRegistryHandler'
+import { BONDED_VOTES_SOURCE_TOPICS, GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import { GovernanceVeBatchHandler, VE_TOPICS } from '@handlers/governanceVeBatchHandler'
 import configIndexer from '@indexer/configIndexer'
 import logger from '@logger'
+import BondedVotesSourceCache from '@modules/bondedVotesSourceCache'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import DaoAddressCache from '@modules/daoAddressCache'
 import SafeTrackingModule from '@modules/safe/safeTracking'
 import TokenEligibilityCache from '@modules/tokenEligibilityCache'
-import { type HexAddress, type LogServicePattern, ICrawStrategy, NetworksEnum } from '@types'
+import { type HexAddress, ICrawStrategy, type LogServicePattern, NetworksEnum } from '@types'
 import { ethers, Interface, type Log } from 'ethers'
 
 const llo = logger.logMeta.bind(null, { service: 'module:PoolingFilter' })
@@ -83,12 +85,36 @@ const PoolingCrawler = {
       if (includeTransfer) {
         return await PoolingCrawler._filterTransferLogs(logs, network)
       } else {
+        await PoolingCrawler._forwardBondedVotesLogs(logs, network)
         const filtered = await PoolingCrawler._filterDelegateVotesLogs(logs, network)
         return await PoolingCrawler._filterVeLogs(filtered, network)
       }
     } catch (error) {
       logger.error('PoolingCrawler filterLogs', llo({ network, error }))
       return logs
+    }
+  },
+
+  /**
+   * Voting power of a BondedVotes token also moves with the contracts it reads from (the wrapped votes source and
+   * the escrow behind it), and those keep emitting after the plugin crawl of the token has ended. Their logs are
+   * handled here, and still flow on: the same contract can be a plugin token of another DAO.
+   */
+  async _forwardBondedVotesLogs(logs: Log[], network: NetworksEnum) {
+    if (!logs.some(log => log.topics.length > 0 && BONDED_VOTES_SOURCE_TOPICS.has(log.topics[0]))) return
+
+    try {
+      await BondedVotesSourceCache.refresh(network)
+      const sourceLogs = logs.filter(
+        log =>
+          log.topics.length > 0 &&
+          BONDED_VOTES_SOURCE_TOPICS.has(log.topics[0]) &&
+          BondedVotesSourceCache.isSource(network, log.address),
+      )
+      if (sourceLogs.length > 0) await GovernanceBondedVotesHandler.processSourceLogs(sourceLogs, network)
+    } catch (error) {
+      // only the BondedVotes logs of this tick are skipped, the other filters still run
+      logger.error('BondedVotes source logs processing failed', llo({ network, error }))
     }
   },
 

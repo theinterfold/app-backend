@@ -9,35 +9,12 @@ import { EnumQueueName, type IMigration, IPluginInterfaceType } from '@types'
 const MIGRATION = '20261105120000-backfillCrispProposals'
 const llo = logger.logMeta.bind(null, { service: `Migration: ${MIGRATION}` })
 
-// CRISP proposals indexed before the indexer read the round of a proposal have none of it: give them what
-// ProposalCreated stores for a CRISP proposal, and the final tally of those already executed. The tally of the others
-// comes with the Interfold crawl queued afterwards. A proposal is selected by its missing e3Id, so a re-run resumes
-// where it stopped.
-export const backfillCrispProposal = async (proposal: Proposal, plugin: Plugin): Promise<boolean> => {
-  const { network, proposalIndex } = proposal
-  const data = await CrispInterfoldHandler.readProposalData(plugin, proposalIndex, network)
-  if (!data) return false
-
-  const updated = await Models.Proposal.findOneAndUpdate(
-    { _id: proposal._id },
-    {
-      $set: {
-        e3Id: data.e3Id,
-        isTallyPublished: false,
-        ...(data.votingPowerDivisor && { votingPowerDivisor: data.votingPowerDivisor }),
-        ...(data.historicalTotalSupply !== undefined && { 'snapshot.totalSupply': data.historicalTotalSupply }),
-        'settings.minParticipation': data.settings.minParticipation,
-        'settings.supportThreshold': data.settings.supportThreshold,
-        'settings.minVoterVotingPower': data.settings.minVoterVotingPower,
-      },
-    },
-    { returnDocument: 'after' },
-  )
-  if (updated?.executed?.status) await CrispInterfoldHandler.syncTally(updated, plugin)
-
-  return true
-}
-
+// Backfills the CRISP proposals indexed before the indexer read the round of a proposal. For every CRISP plugin it
+// reads the plugin's Interfold, then gives each proposal still missing its e3Id what ProposalCreated stores for a
+// CRISP proposal, and the final tally of those already executed (CrispInterfoldHandler.backfillProposal). A proposal
+// that cannot be backfilled is logged and skipped, and a re-run resumes where it stopped. The tally of the other
+// proposals comes with the Interfold events, from the crawl queued for every network with a CRISP plugin at the end,
+// or with the round sweep when that crawl has already passed them.
 export const backfillCrispProposalsMigration: IMigration = {
   start: async () => {
     logger.info('Starting migration', llo({ migration: MIGRATION }))
@@ -61,7 +38,7 @@ export const backfillCrispProposalsMigration: IMigration = {
         const proposals: Proposal[] = await Models.Proposal.find({ pluginAddress, network, e3Id: { $exists: false } })
         for (const proposal of proposals) {
           try {
-            if (await backfillCrispProposal(proposal, plugin)) backfilled++
+            if (await CrispInterfoldHandler.backfillProposal(proposal, plugin)) backfilled++
             else skipped++
           } catch (error) {
             skipped++

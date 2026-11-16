@@ -1,3 +1,6 @@
+import { GovernanceERC20 } from '@artifacts/GovernanceERC20'
+import { VotingEscrow } from '@artifacts/VotingEscrow'
+import { VotingEscrowIncreasing } from '@artifacts/VotingEscrowIncreasing'
 import { Models } from '@dbModels'
 import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
 import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
@@ -6,7 +9,7 @@ import Web3Utils from '@helpers/web3Utils'
 import logger from '@logger'
 import { Erc20Governance } from '@src/governance/erc20Governance'
 import { type HexAddress, type ILogInfo, IPluginStatus, ITokenType, type NetworksEnum } from '@types'
-import { type LogDescription } from 'ethers'
+import { ethers, Interface, type Log, type LogDescription } from 'ethers'
 
 const llo = logger.logMeta.bind(null, { service: 'handlers:GovernanceBondedVotesHandler' })
 
@@ -31,10 +34,30 @@ const affectedAccounts = ({ parsedEvent: { name, args } }: IEvent): string[] => 
     case 'Deposit':
     case 'Withdraw':
       return [args.depositor]
+    // The escrow adapter moves the delegatee's power when a lock is created, transferred, withdrawn, split or
+    // merged, and on explicit (un)delegation of lock ids, and emits only these for it, not DelegateChanged.
+    case 'TokensDelegated':
+    case 'TokensUndelegated':
+      return [args.sender, args.delegatee]
     default:
       return []
   }
 }
+
+// Events of the contracts a BondedVotes token reads its voting power from, as the live crawler sees them. The token
+// and its checkpoints emit BondedDelegateChanged and BondedCheckpointed, which have their own crawler config.
+const sourceTopics = new Map<string, { eventName: string; iface: Interface }>()
+const registerSourceTopics = (eventNames: string[], iface: Interface) => {
+  for (const eventName of eventNames) {
+    const topic = iface.getEvent(eventName)?.topicHash
+    if (topic) sourceTopics.set(topic, { eventName, iface })
+  }
+}
+registerSourceTopics(['DelegateVotesChanged'], new Interface(GovernanceERC20.abi))
+registerSourceTopics(['DelegateChanged', 'TokensDelegated', 'TokensUndelegated'], new Interface(VotingEscrow.abi))
+registerSourceTopics(['Deposit', 'Withdraw'], new Interface(VotingEscrowIncreasing.abi))
+
+export const BONDED_VOTES_SOURCE_TOPICS = new Set(sourceTopics.keys())
 
 // Installed, supported BondedVotes tokens that read voting power from the contract emitting the event. Anyone can
 // deploy a token that reports another token's sources, so only tokens a DAO runs a plugin on are considered, and a
@@ -190,9 +213,42 @@ const createHandlers = (refresh: (events: IEvent[]) => Promise<void>) => {
   }
 }
 
+const handlers = createHandlers(refreshByEmitter)
+
 export const GovernanceBondedVotesHandler = {
   // For every installed BondedVotes token the emitting contract feeds.
-  ...createHandlers(refreshByEmitter),
+  ...handlers,
+
+  // Live logs of the contracts feeding BondedVotes tokens (see BONDED_VOTES_SOURCE_TOPICS), already matched to their
+  // emitters by the caller. Returns the number of events handled.
+  processSourceLogs: async (logs: Log[], network: NetworksEnum): Promise<number> => {
+    const events: IEvent[] = []
+    for (const log of logs) {
+      const topicInfo = sourceTopics.get(log.topics[0])
+      if (!topicInfo) continue
+      try {
+        const parsedEvent = topicInfo.iface.parseLog({ topics: log.topics as string[], data: log.data })
+        if (!parsedEvent) continue
+        events.push({
+          parsedEvent,
+          info: {
+            network,
+            blockNumber: log.blockNumber,
+            transactionIndex: log.transactionIndex,
+            logIndex: log.index,
+            transactionHash: log.transactionHash as HexAddress,
+            address: ethers.getAddress(log.address) as HexAddress,
+            eventName: topicInfo.eventName,
+          },
+        })
+      } catch (error) {
+        logger.warn('Cannot parse a BondedVotes source log, skipping it', llo({ network, error, log }))
+      }
+    }
+
+    if (events.length > 0) await handlers.votingPowerChangedBatch(events)
+    return events.length
+  },
 
   // Handlers for the crawl of one token: its events are never matched against other tokens' sources.
   forToken: (token: HexAddress) =>

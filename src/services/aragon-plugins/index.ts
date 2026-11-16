@@ -103,7 +103,7 @@ const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => 
   },
 
   pluginQueue: async (params: IQueuePlugin) => {
-    const { address, network, isHistorical } = params
+    const { address, network, isHistorical, attempt } = params
     const plugin = await Models.Plugin.findByAddress(address, network)
 
     if (!plugin?.interfaceType) {
@@ -140,7 +140,7 @@ const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => 
             llo({ plugin: plugin.address, token: token.address, tokenTye: token.type }),
           )
 
-          await LogTokenVoting.start(plugin, token, isHistorical)
+          await LogTokenVoting.start(plugin, token, isHistorical, attempt)
         } else {
           logger.warn('Sync plugin token not supported', llo({ plugin: plugin?.address, token: token?.address }))
         }

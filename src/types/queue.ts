@@ -131,6 +131,8 @@ export interface IQueuePlugin {
   address: HexAddress
   network: NetworksEnum
   isHistorical?: boolean
+  /** Retries already made of a sync that could not start, absent (0) for the first run. */
+  attempt?: number
   conditionAddress?: HexAddress
   /** A Safe has a plugin row per DAO, so its row is only found with the DAO. */
   daoAddress?: HexAddress

@@ -22,6 +22,8 @@ const buildVotesByOption = (counts: bigint[], divisor: string) =>
       : [{ type: CRISP_VOTE_OPTIONS[index], totalVotingPower: (count * BigInt(divisor)).toString() }],
   )
 
+const hasDivisor = (divisor: string | undefined): divisor is string => !!divisor && BigInt(divisor) > 0n
+
 // Runs a read and never throws: a failed read is logged and leaves its field unset
 const settle = async <T>(what: string, context: object, read: () => Promise<T>): Promise<T | undefined> => {
   try {
@@ -90,10 +92,16 @@ export const CrispInterfoldHandler = {
   },
 
   // What a CRISP proposal carries from the contract. Frozen at creation, so it is read once; the tally is filled in
-  // when the round publishes it. Returns null when the contract has no such proposal.
-  readProposalData: async (plugin: Plugin, proposalIndex: string, network: NetworksEnum) => {
+  // when the round publishes it. Returns null when the contract has no such proposal. With a `blockNumber` the
+  // proposal is read at that block.
+  readProposalData: async (plugin: Plugin, proposalIndex: string, network: NetworksEnum, blockNumber?: number) => {
     const context = { pluginAddress: plugin.address, proposalIndex, network }
-    const onChain = await ProposalHelper.getProposalCrisp({ proposalIndex, pluginAddress: plugin.address, network })
+    const onChain = await ProposalHelper.getProposalCrisp({
+      proposalIndex,
+      pluginAddress: plugin.address,
+      network,
+      blockNumber,
+    })
 
     // a proposal this plugin never created reads back as zeroes
     if (!onChain || Number(onChain.parameters.snapshotBlock) === 0) return null
@@ -105,7 +113,7 @@ export const CrispInterfoldHandler = {
       ),
       settle('the Interfold coordinator', context, async () => CrispInterfoldHandler.ensureInterfold(plugin)),
     ])
-    const votingPowerDivisor = interfold
+    const divisorRead = interfold
       ? await settle('the voting power divisor', { ...context, e3Id }, async () =>
           CrispHelper.getVotingPowerDivisor(interfold, e3Id, network),
         )
@@ -114,13 +122,41 @@ export const CrispInterfoldHandler = {
     return {
       e3Id,
       historicalTotalSupply,
-      votingPowerDivisor,
+      // a zero divisor means the round has none: left unset, like one that could not be read
+      votingPowerDivisor: hasDivisor(divisorRead) ? divisorRead : undefined,
       settings: {
         minParticipation: Number(onChain.parameters.minParticipation),
         supportThreshold: Number(onChain.parameters.supportThreshold),
         minVoterVotingPower: onChain.parameters.minVotingPower.toString(),
       },
     }
+  },
+
+  // Gives a CRISP proposal stored without its round what ProposalCreated stores for one, and the final tally when it
+  // is already executed. The tally of the others comes with the Interfold events or the round sweep. Returns false
+  // when the proposal cannot be read from the contract; it is then still selected by its missing e3Id the next time.
+  backfillProposal: async (proposal: Proposal, plugin: Plugin): Promise<boolean> => {
+    const data = await CrispInterfoldHandler.readProposalData(plugin, proposal.proposalIndex, proposal.network)
+    if (!data) return false
+
+    const updated = await Models.Proposal.findOneAndUpdate(
+      { _id: proposal._id },
+      {
+        $set: {
+          e3Id: data.e3Id,
+          isTallyPublished: false,
+          ...(data.votingPowerDivisor && { votingPowerDivisor: data.votingPowerDivisor }),
+          ...(data.historicalTotalSupply !== undefined && { 'snapshot.totalSupply': data.historicalTotalSupply }),
+          'settings.minParticipation': data.settings.minParticipation,
+          'settings.supportThreshold': data.settings.supportThreshold,
+          'settings.minVoterVotingPower': data.settings.minVoterVotingPower,
+        },
+      },
+      { returnDocument: 'after' },
+    )
+    if (updated?.executed?.status) await CrispInterfoldHandler.syncTally(updated, plugin)
+
+    return true
   },
 
   // Stores the tally the plugin reports, in raw token units, and marks it published. Called when the round publishes
@@ -135,15 +171,23 @@ export const CrispInterfoldHandler = {
     )
     if (!counts) return
 
-    let divisor = proposal.votingPowerDivisor
+    // a zero divisor means the round has none, as `CrispVoting._canExecute` reads it: nothing to scale the counts with
+    let divisor = hasDivisor(proposal.votingPowerDivisor) ? proposal.votingPowerDivisor : undefined
     if (!divisor && e3Id && plugin.interfoldAddress) {
       const interfold = plugin.interfoldAddress
-      divisor = await settle('the voting power divisor', { ...context, e3Id }, async () =>
+      const read = await settle('the voting power divisor', { ...context, e3Id }, async () =>
         CrispHelper.getVotingPowerDivisor(interfold, e3Id, network),
       )
+      divisor = hasDivisor(read) ? read : undefined
     }
 
-    if (!divisor) return
+    if (!divisor) {
+      logger.warn(
+        'CrispInterfoldHandler - the round has no voting power divisor, the tally stays unpublished',
+        llo({ ...context, e3Id }),
+      )
+      return
+    }
 
     await Models.Proposal.updateOne(
       { _id: proposal._id },

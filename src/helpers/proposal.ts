@@ -141,16 +141,19 @@ const ProposalHelper = {
     proposalIndex,
     pluginAddress,
     network,
+    blockNumber,
   }: {
     proposalIndex: string
     pluginAddress: HexAddress
     network: NetworksEnum
+    blockNumber?: number
   }): Promise<IProposalCrispOnChain | null> {
     try {
       const provider = ProviderModule.getAnyRpcProvider(network)
       const contract = new Contract(pluginAddress, CrispVoting.abi, provider)
+      const overrides = blockNumber === undefined ? {} : { blockTag: blockNumber }
       return await retryRequest(async () =>
-        BottleneckModule.getNodeLimiter(network).schedule(async () => contract.getProposal(proposalIndex)),
+        BottleneckModule.getNodeLimiter(network).schedule(async () => contract.getProposal(proposalIndex, overrides)),
       )
     } catch (error) {
       logger.error('Error getting proposal crisp', llo({ proposalIndex, pluginAddress, network, error }))

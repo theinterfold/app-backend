@@ -1,13 +1,16 @@
+import { Models } from '@dbModels'
 import { GovernanceBondedVotesHandler } from '@handlers/governanceBondedVotesHandler'
 import { GovernanceErc20Handler } from '@handlers/governanceErc20Handler'
 import ConfigIndexerHelper from '@helpers/configIndexer'
 import GovernanceBondedVotesHelper from '@helpers/governanceBondedVotes'
+import RabbitMQHelper, { getRetryDelayMs } from '@helpers/rabbitMQ'
 import configIndexer from '@indexer/configIndexer'
 import logger from '@logger'
 import type Plugin from '@models/schema/plugin'
 import type Token from '@models/schema/token'
 import { BlockchainLogCrawler } from '@modules/crawlers'
 import {
+  EnumQueueName,
   type HexAddress,
   IBondedVotesLogs,
   ICrispVotingLogs,
@@ -16,6 +19,7 @@ import {
   type IIndexerConfig,
   type IIndexerConfigHandler,
   IPluginInterfaceType,
+  IPluginStatus,
   ITokenType,
   ITokenVotingLogs,
   IVotingEscrowAdapterLogs,
@@ -24,13 +28,18 @@ import {
 
 const llo = logger.logMeta.bind(null, { service: 'service:indexer:LogTokenVoting' })
 
+// A BondedVotes crawler that cannot be built is retried with a doubling delay, up to a maximum.
+const BONDED_VOTES_BUILD_RETRY_BASE_DELAY_MS = 60 * 1000
+const BONDED_VOTES_BUILD_RETRY_MAX_DELAY_MS = 30 * 60 * 1000
+const BONDED_VOTES_BUILD_MAX_RETRIES = 8
+
 export const LogTokenVoting = {
-  start: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {
+  start: async (plugin: Plugin, token: Token, isHistorical?: boolean, attempt?: number) => {
     switch (token.type) {
       case ITokenType.escrowAdapter:
         return LogTokenVoting.veGovernance(plugin, token, isHistorical)
       case ITokenType.bondedVotes:
-        return LogTokenVoting.bondedVotesGovernance(plugin, token, isHistorical)
+        return LogTokenVoting.bondedVotesGovernance(plugin, token, isHistorical, attempt)
       default:
         return LogTokenVoting.erc20Governance(plugin, token, isHistorical)
     }
@@ -154,7 +163,10 @@ export const LogTokenVoting = {
       },
       [IBondedVotesLogs.BondedCheckpointed]: refreshVotingPower,
       [IGovernanceErc20Logs.DelegateVotesChanged]: refreshVotingPower,
+      // the adapter's auto-delegation of locks emits only TokensDelegated/TokensUndelegated, not DelegateChanged
       [IVotingEscrowAdapterLogs.DelegateChanged]: refreshVotingPower,
+      [IVotingEscrowAdapterLogs.TokensDelegated]: refreshVotingPower,
+      [IVotingEscrowAdapterLogs.TokensUndelegated]: refreshVotingPower,
       [IVotingEscrowIncreasingLogs.Deposit]: refreshVotingPower,
       [IVotingEscrowIncreasingLogs.Withdraw]: refreshVotingPower,
     }
@@ -165,6 +177,11 @@ export const LogTokenVoting = {
         config: item.config.map(cfg => ({ ...cfg, ...handlerByEvent[item.event] })),
       }))
 
+    const logService = ConfigIndexerHelper.builders.token(ITokenType.bondedVotes, plugin.network, token.address)
+    // The start block only seeds a crawl that has no progress yet, and finding it reads the history of every contract
+    // (archive state): leave it out once the crawl is under way.
+    const hasProgress = !!(await Models.ConfigIndexer.findExistingLog({ network: plugin.network, service: logService }))
+
     return new BlockchainLogCrawler({
       onlyHistorical: isHistorical,
       network: plugin.network,
@@ -172,14 +189,16 @@ export const LogTokenVoting = {
       address: [...new Set([token.address, checkpoints, votesSource, escrow])].filter(
         (address): address is HexAddress => !!address,
       ),
-      fromBlock: await GovernanceBondedVotesHelper.getStartBlock(token.address, plugin.network),
+      fromBlock: hasProgress
+        ? undefined
+        : await GovernanceBondedVotesHelper.getStartBlock(token.address, plugin.network),
       onError: async (error: any, log: any) => LogTokenVoting.processError(error, plugin, log),
-      logService: ConfigIndexerHelper.builders.token(ITokenType.bondedVotes, plugin.network, token.address),
+      logService,
       stopOnError: true,
     })
   },
 
-  bondedVotesGovernance: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {
+  bondedVotesGovernance: async (plugin: Plugin, token: Token, isHistorical?: boolean, attempt = 0) => {
     logger.verbose(
       'Start LogTokenVoting bondedVotesGovernance',
       llo({ pluginAddress: plugin.address, tokenAddress: token.address }),
@@ -188,18 +207,63 @@ export const LogTokenVoting = {
     const crawlers = [LogTokenVoting.buildPluginCrawler(plugin, isHistorical)]
 
     // A token that cannot be crawled (reverting sources, no code, archive RPC down) must not fail the plugin sync, or
-    // its queue message would never be settled.
+    // its queue message would never be settled. Its crawl leaves no progress for the requeue service until it first
+    // runs, so the plugin is queued again to build it later, once the crawls and `end()` have succeeded. If a crawl
+    // fails, the plugins message stays unsettled with its key in `activeJobs`, so a retry with the same id would be
+    // dropped as a duplicate; the message is redelivered after a restart, which builds the crawler again.
+    let buildFailure: { error: unknown } | undefined
     try {
       crawlers.push(await LogTokenVoting.buildBondedVotesCrawler(plugin, token, isHistorical))
     } catch (error) {
-      logger.error(
-        'LogTokenVoting: cannot build the bonded votes crawler, skipping it',
-        llo({ pluginAddress: plugin.address, tokenAddress: token.address, error }),
-      )
+      buildFailure = { error }
     }
 
     await Promise.all(crawlers.map(async crawler => crawler.crawl()))
     await Promise.all(crawlers.map(async crawler => crawler.end()))
+
+    if (buildFailure) {
+      await LogTokenVoting.retryBondedVotesBuild(plugin, token, isHistorical, attempt, buildFailure.error)
+    }
+  },
+
+  // Queues the plugin again with a growing delay, up to a maximum number of retries, and not for a plugin that is no
+  // longer installed. Whatever else queues the plugin starts its own count from zero.
+  retryBondedVotesBuild: async (
+    plugin: Plugin,
+    token: Token,
+    isHistorical: boolean | undefined,
+    attempt: number,
+    error: unknown,
+  ) => {
+    const fields = { pluginAddress: plugin.address, tokenAddress: token.address, attempt, error }
+    const nextAttempt = attempt + 1
+
+    if (plugin.status !== IPluginStatus.installed) {
+      logger.warn(
+        'LogTokenVoting: cannot build the bonded votes crawler, plugin not installed, not retrying',
+        llo(fields),
+      )
+      return
+    }
+    if (nextAttempt > BONDED_VOTES_BUILD_MAX_RETRIES) {
+      logger.error('LogTokenVoting: cannot build the bonded votes crawler, giving up', llo(fields))
+      return
+    }
+
+    const delayMs = getRetryDelayMs(
+      nextAttempt,
+      BONDED_VOTES_BUILD_RETRY_BASE_DELAY_MS,
+      BONDED_VOTES_BUILD_RETRY_MAX_DELAY_MS,
+    )
+    logger.warn('LogTokenVoting: cannot build the bonded votes crawler, retrying later', llo({ ...fields, delayMs }))
+    await RabbitMQHelper.sendDelayedMessage(
+      EnumQueueName.plugins,
+      {
+        id: `${plugin.network}-${plugin.address}`,
+        params: { address: plugin.address, network: plugin.network, isHistorical, attempt: nextAttempt },
+      },
+      delayMs,
+    )
   },
 
   erc20Governance: async (plugin: Plugin, token: Token, isHistorical?: boolean) => {

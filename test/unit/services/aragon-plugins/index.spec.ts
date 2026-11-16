@@ -517,6 +517,31 @@ describe('AragonPlugins: index', () => {
       expect(logTokenVotingStub.calledOnce).to.be.true
     })
 
+    it('should pass the retry attempt of a message to the BondedVotes sync, and start from zero without one', async () => {
+      const processStub = sandbox.stub(RabbitMQHelper, 'process')
+      sandbox.stub(Models.Plugin, 'findByAddress').resolves({
+        interfaceType: IPluginInterfaceType.tokenVoting,
+        tokenAddress: '0xTokenAddress',
+        network: NetworksEnum.ethereumMainnet,
+      })
+      sandbox.stub(Models.Token, 'findOne').resolves({
+        type: ITokenType.bondedVotes,
+        isGovernance: true,
+        hasDelegate: true,
+      } as any)
+      const logTokenVotingStub = sandbox.stub(LogTokenVoting, 'start').resolves()
+
+      await AragonPluginsService.start()
+
+      const handler = processStub.getCall(2).args[1]
+      const params = { address: '0xPluginAddress', network: NetworksEnum.ethereumMainnet, isHistorical: false }
+      await handler({ id: 'some-id', params: { ...params, attempt: 3 } })
+      await handler({ id: 'some-id', params })
+
+      expect(logTokenVotingStub.firstCall.args[3]).to.equal(3)
+      expect(logTokenVotingStub.secondCall.args[3]).to.be.undefined
+    })
+
     it('should process plugins queue for spp interface type', async () => {
       const processStub = sandbox.stub(RabbitMQHelper, 'process')
       const pluginStub = sandbox.stub(Models.Plugin, 'findByAddress').resolves({

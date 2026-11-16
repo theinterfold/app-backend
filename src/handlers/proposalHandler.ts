@@ -225,8 +225,14 @@ export const ProposalHandler = {
       }
 
       if (relatedPlugin.interfaceType === IPluginInterfaceType.crisp) {
-        // the frozen parameters and the round of the proposal, read from the contract; the tally comes later
-        const crisp = await CrispInterfoldHandler.readProposalData(relatedPlugin, proposalIndex, info.network)
+        // the frozen parameters and the round of the proposal, read from the contract at the creation block; the tally
+        // comes later. A failed read leaves the round to the backfill of the round sweep.
+        const crisp = await CrispInterfoldHandler.readProposalData(
+          relatedPlugin,
+          proposalIndex,
+          info.network,
+          info.blockNumber,
+        )
         if (crisp) {
           document.e3Id = crisp.e3Id
           document.isTallyPublished = false

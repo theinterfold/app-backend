@@ -35,7 +35,7 @@ const read = async (token: HexAddress, network: NetworksEnum, method: string, ..
   return schedule(network, async () => contract[method](...args))
 }
 
-// Smallest block at which `address` has code. Needs an archive node, like any historical crawl.
+// Smallest block at which `address` has code. Reads the code at historical blocks, which needs archive state.
 const getCreationBlock = async (address: HexAddress, network: NetworksEnum): Promise<number> => {
   const provider = ProviderModule.getAnyRpcProvider(network)
   const hasCode = async (block: number) =>

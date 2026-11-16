@@ -235,6 +235,25 @@ describe('Handlers: CrispInterfoldHandler', () => {
       expect((await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })).isTallyPublished).to.not.equal(true)
     })
 
+    it('should store nothing when the round has no divisor, however it is read', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      const read = await createProposal(pluginAddress, '1', '7')
+      const stored = await createProposal(pluginAddress, '2', '8', '0')
+      getDivisorStub.resolves('0')
+
+      await CrispInterfoldHandler.syncTally(read, plugin)
+      await CrispInterfoldHandler.syncTally(stored, plugin)
+
+      for (const proposalIndex of ['1', '2']) {
+        const proposal = await Models.Proposal.findOne({ pluginAddress, proposalIndex })
+        expect(proposal.isTallyPublished).to.not.equal(true)
+        expect(proposal.metrics.votesByOption).to.have.length(0)
+      }
+      // a stored zero is not trusted: it is read again
+      expect(getDivisorStub.calledTwice).to.be.true
+      expect((logger.warn as SinonStub).calledTwice).to.be.true
+    })
+
     it('should skip a tally index that has no vote option', async () => {
       const plugin = await createPlugin(pluginAddress, coordinator)
       const proposal = await createProposal(pluginAddress, '1', '7', '10')
@@ -278,7 +297,8 @@ describe('Handlers: CrispInterfoldHandler', () => {
 
       const data = await CrispInterfoldHandler.readProposalData(plugin, '1', network)
 
-      expect(getProposalStub.calledOnceWith({ proposalIndex: '1', pluginAddress, network })).to.be.true
+      expect(getProposalStub.calledOnceWith({ proposalIndex: '1', pluginAddress, network, blockNumber: undefined })).to
+        .be.true
       expect(totalVotingPowerStub.calledOnceWith(pluginAddress, network, 900n)).to.be.true
       expect(getDivisorStub.calledOnceWith(coordinator, '7', network)).to.be.true
       expect(data).to.deep.equal({
@@ -287,6 +307,24 @@ describe('Handlers: CrispInterfoldHandler', () => {
         votingPowerDivisor: '1000',
         settings: { minParticipation: 20, supportThreshold: 60, minVoterVotingPower: '50' },
       })
+    })
+
+    it('should read the proposal at the given block', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+
+      await CrispInterfoldHandler.readProposalData(plugin, '1', network, 1100)
+
+      expect(getProposalStub.calledOnceWith({ proposalIndex: '1', pluginAddress, network, blockNumber: 1100 })).to.be
+        .true
+    })
+
+    it('should leave the divisor unset when the round has none', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      getDivisorStub.resolves('0')
+
+      const data = await CrispInterfoldHandler.readProposalData(plugin, '1', network)
+
+      expect(data?.votingPowerDivisor).to.equal(undefined)
     })
 
     it('should read and store the coordinator when the plugin has none', async () => {
@@ -323,6 +361,72 @@ describe('Handlers: CrispInterfoldHandler', () => {
       getProposalStub.resolves({ ...onChain, parameters: { ...onChain.parameters, snapshotBlock: 0n } })
       expect(await CrispInterfoldHandler.readProposalData(plugin, '1', network)).to.equal(null)
       expect(totalVotingPowerStub.called).to.be.false
+    })
+  })
+
+  describe('backfillProposal', () => {
+    const onChain = {
+      e3Id: 7n,
+      parameters: { snapshotBlock: 900n, minVotingPower: 50n, minParticipation: 20n, supportThreshold: 60n },
+    }
+    let getProposalStub: SinonStub
+
+    beforeEach(() => {
+      getProposalStub = sandbox.stub(ProposalHelper, 'getProposalCrisp').resolves(onChain as any)
+      sandbox.stub(CrispHelper, 'getTotalVotingPower').resolves('5000')
+    })
+
+    it('should store the round, the frozen parameters and the supply at the snapshot', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      const proposal = await createProposal(pluginAddress, '1')
+
+      expect(await CrispInterfoldHandler.backfillProposal(proposal, plugin)).to.be.true
+
+      const stored = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
+      expect(stored.e3Id).to.equal('7')
+      expect(stored.isTallyPublished).to.be.false
+      expect(stored.votingPowerDivisor).to.equal('1000')
+      expect(stored.snapshot.totalSupply).to.equal('5000')
+      expect(stored.settings.minParticipation).to.equal(20)
+      expect(stored.settings.supportThreshold).to.equal(60)
+      expect(stored.settings.minVoterVotingPower).to.equal('50')
+    })
+
+    it('should read the final tally of an executed proposal', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      const proposal = await createProposal(pluginAddress, '1')
+      await Models.Proposal.updateOne(
+        { _id: proposal._id },
+        { $set: { executed: { status: true, blockNumber: 1200 } } },
+      )
+
+      await CrispInterfoldHandler.backfillProposal((await Models.Proposal.findById(proposal._id))!, plugin)
+
+      const stored = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
+      expect(stored.isTallyPublished).to.be.true
+      expect(stored.metrics.votesByOption.map(option => option.totalVotingPower)).to.deep.equal([
+        '6000',
+        '3000',
+        '1000',
+      ])
+    })
+
+    it('should leave the tally of an open proposal to the Interfold events', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      const proposal = await createProposal(pluginAddress, '1')
+
+      await CrispInterfoldHandler.backfillProposal(proposal, plugin)
+
+      expect(getTallyStub.called).to.be.false
+    })
+
+    it('should report a proposal the contract does not have and store nothing', async () => {
+      const plugin = await createPlugin(pluginAddress, coordinator)
+      const proposal = await createProposal(pluginAddress, '1')
+      getProposalStub.resolves(null)
+
+      expect(await CrispInterfoldHandler.backfillProposal(proposal, plugin)).to.be.false
+      expect((await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })).e3Id).to.equal(undefined)
     })
   })
 })

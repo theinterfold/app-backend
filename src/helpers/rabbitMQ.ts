@@ -29,7 +29,7 @@ const getRetryAttempt = (headers: Record<string, unknown> | undefined): number =
   return Number.isSafeInteger(value) && value >= 0 ? value : 0
 }
 
-const getRetryDelayMs = (attempt: number, baseDelayMs: number, maxDelayMs: number): number => {
+export const getRetryDelayMs = (attempt: number, baseDelayMs: number, maxDelayMs: number): number => {
   return Math.min(baseDelayMs * 2 ** Math.max(0, attempt - 1), maxDelayMs)
 }
 

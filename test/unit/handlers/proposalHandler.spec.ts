@@ -825,6 +825,14 @@ describe('ProposalHandler', () => {
           proposalIndex: '1',
         })
 
+        expect(
+          getProposalCrispStub.calledOnceWith({
+            proposalIndex: '1',
+            pluginAddress: '0xcrisp-plugin',
+            network,
+            blockNumber: info.blockNumber,
+          }),
+        ).to.be.true
         expect(totalVotingPowerStub.calledOnceWith('0xcrisp-plugin', network, 90n)).to.be.true
         expect(divisorStub.calledOnceWith('0x3333333333333333333333333333333333333333', '7', network)).to.be.true
         expect(savedProposal.e3Id).to.eq('7')
