@@ -7,15 +7,10 @@ import { EndingSoonNotifier } from '@services/aragon-telegram/helpers/endingSoon
 import { TelegramMetrics } from '@services/aragon-telegram/helpers/metrics'
 import { TelegramNotificationOutboxPublisher } from '@services/aragon-telegram/helpers/notificationOutbox'
 import { NotificationRenderer } from '@services/aragon-telegram/helpers/notificationRenderer'
-import { TaskSchedulerState } from '@state/taskSchedulerState'
+import { TASK_CHECK_INTERVAL_MS, TaskSchedulerState } from '@state/taskSchedulerState'
 import { EnumConnection, EnumServiceName, type IService } from '@types'
 
 const llo = logger.logMeta.bind(null, { service: 'service:TelegramService' })
-
-// The scheduler only runs a task on a tick that lands after nextStartAt. A tick
-// equal to the interval arrives a few milliseconds early and gets skipped, which
-// doubles the effective period, so the tick has to be much shorter than the interval.
-const TASK_CHECK_INTERVAL_MS = 5 * 1000
 
 const API_PROBE_TIMEOUT_MS = 5000
 

@@ -92,7 +92,7 @@ export const ProposalHandler = {
           minParticipation: settings?.minParticipation,
           minDuration: settings?.minDuration,
           minProposerVotingPower: settings?.minProposerVotingPower,
-          minVoterVotingPower: settings?.minVoterVotingPower, // crisp
+          minVoterVotingPower: settings?.minVoterVotingPower,
           stages: settings?.stages?.toObject(), // spp settings
         }
       }
@@ -678,8 +678,11 @@ export const ProposalHandler = {
       }
 
       // the tally the plugin stores at execution is final
-      const plugin = await Models.Plugin.findByAddress(info.address, info.network)
-      if (plugin?.interfaceType === IPluginInterfaceType.crisp) await CrispInterfoldHandler.syncTally(proposal, plugin)
+      if (proposal.e3Id) {
+        const plugin = await Models.Plugin.findByAddress(info.address, info.network)
+        if (plugin?.interfaceType === IPluginInterfaceType.crisp)
+          await CrispInterfoldHandler.syncTally(proposal, plugin)
+      }
 
       const hashDaoUpgradeAction = proposal.rawActions?.find((action: IRawAction) => {
         const methodHash = Web3Utils.getFunctionSelector(KnownActionSignature.UpgradeToAndCall)
@@ -1153,22 +1156,9 @@ export const ProposalHandler = {
       sp => sp.pluginAddress === subProposal.pluginAddress && sp.proposalIndex === subProposal.proposalIndex,
     )
 
-    if (!parent || !entry) return
+    if (!entry) return
 
-    await Models.Proposal.updateOne(
-      { _id: subProposal._id },
-      {
-        $set: {
-          parentProposal: {
-            pluginAddress: parent.pluginAddress,
-            proposalIndex: parent.proposalIndex,
-            stageIndex: entry.stageIndex,
-            transactionHash: entry.transactionHash,
-            blockNumber: entry.blockNumber,
-          },
-        },
-      },
-    )
+    await ProposalHandler.linkParentToSubProposals(parent!, [entry], subProposal.network)
   },
 
   proposalCanceled: async (parsedEvent: LogDescription, info: ILogInfo) => {

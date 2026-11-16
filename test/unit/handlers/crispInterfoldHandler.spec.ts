@@ -103,17 +103,24 @@ describe('Handlers: CrispInterfoldHandler', () => {
       expect(proposal.metrics.votesByOption[0].totalVotingPower).to.equal('6000')
     })
 
-    it('should publish the tally without options while the divisor cannot be read', async () => {
-      getDivisorStub.rejects(new Error('rpc'))
+    it('should store nothing while the divisor cannot be read, and publish once it can', async () => {
+      getDivisorStub.onFirstCall().rejects(new Error('rpc'))
       await createPlugin(pluginAddress, coordinator)
       await createProposal(pluginAddress, '1', '7')
 
       await CrispInterfoldHandler.plaintextOutputPublished(published(7n).parsedEvent, published(7n).info)
 
+      const unpublished = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
+      expect(unpublished.isTallyPublished).to.not.equal(true)
+      expect(unpublished.votingPowerDivisor).to.equal(undefined)
+      expect(unpublished.metrics.votesByOption).to.have.length(0)
+
+      await CrispInterfoldHandler.plaintextOutputPublished(published(7n).parsedEvent, published(7n).info)
+
       const proposal = await Models.Proposal.findOne({ pluginAddress, proposalIndex: '1' })
       expect(proposal.isTallyPublished).to.be.true
-      expect(proposal.votingPowerDivisor).to.equal(undefined)
-      expect(proposal.metrics.votesByOption).to.have.length(0)
+      expect(proposal.votingPowerDivisor).to.equal('1000')
+      expect(proposal.metrics.votesByOption[0].totalVotingPower).to.equal('6000')
     })
 
     it('should ignore an event whose emitter is not the coordinator the plugin stored', async () => {

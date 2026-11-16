@@ -597,6 +597,24 @@ const Web3Helper = {
     }
   },
 
+  // The E3 parameters alone, for callers that do not need the rest of the voting settings
+  async getCrispE3Settings(address: HexAddress, network: NetworksEnum, blockNumber: number) {
+    try {
+      const provider = ProviderModule.getAnyRpcProvider(network)
+      const contract = new Contract(address, CrispVoting.abi, provider)
+
+      const e3 = await retryRequest(async () =>
+        BottleneckModule.getNodeLimiter(network).schedule(async () =>
+          contract.getE3Settings({ blockTag: blockNumber }),
+        ),
+      )
+      return { committeeSize: Number(e3[0]), paramSet: Number(e3[1]) }
+    } catch (error) {
+      logger.warn('Error getting crisp E3 settings', llo({ error, address, blockNumber }))
+      return null
+    }
+  },
+
   // Reads the linked TokenVoting (stage-1) proposal through the Objection plugin, returning its
   // tally so the objection sub-proposal can start from the first stage's results
   async getTokenVotingProposal(

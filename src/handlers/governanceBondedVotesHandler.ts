@@ -135,7 +135,9 @@ const refreshByEmitter = async (events: IEvent[]) => {
   const byEmitter = new Map<string, IEvent[]>()
   for (const event of events) {
     const key = `${event.info.network}-${event.info.address}`
-    byEmitter.set(key, [...(byEmitter.get(key) ?? []), event])
+    const group = byEmitter.get(key)
+    if (group) group.push(event)
+    else byEmitter.set(key, [event])
   }
 
   for (const group of byEmitter.values()) {

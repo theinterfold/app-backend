@@ -793,15 +793,15 @@ describe('Indexer: PluginSettingHandler', () => {
 
       it('should store the crisp settings and the E3 parameters read at the event block', async () => {
         sandbox.stub(Models.Setting, 'findActive').resolves(false)
-        const getCrispSettingsStub = sandbox
-          .stub(Web3Helper, 'getCrispSettings')
+        const getCrispE3SettingsStub = sandbox
+          .stub(Web3Helper, 'getCrispE3Settings')
           .resolves({ committeeSize: 1, paramSet: 2 } as any)
         const createDocumentStub = sandbox.stub(DbOperations, 'createDocument').resolves({} as any)
 
         await PluginSettingHandler.votingSettingsUpdated(parsedEvent as any, info as any)
 
         const settingLog = createDocumentStub.firstCall.args[1] as any
-        expect(getCrispSettingsStub.calledOnceWith('0x456' as any, NetworksEnum.ethereumMainnet, 1)).to.be.true
+        expect(getCrispE3SettingsStub.calledOnceWith('0x456' as any, NetworksEnum.ethereumMainnet, 1)).to.be.true
         expect(settingLog).to.deep.include({
           minParticipation: 15,
           supportThreshold: 50,
@@ -816,7 +816,7 @@ describe('Indexer: PluginSettingHandler', () => {
 
       it('should keep the previous E3 parameters when the contract read fails', async () => {
         sandbox.stub(Models.Setting, 'findActive').resolves({ id: 'setting-1', committeeSize: 0, paramSet: 3 } as any)
-        sandbox.stub(Web3Helper, 'getCrispSettings').resolves(null)
+        sandbox.stub(Web3Helper, 'getCrispE3Settings').resolves(null)
         sandbox.stub(DbOperations, 'updateDocument').resolves({} as any)
         const createDocumentStub = sandbox.stub(DbOperations, 'createDocument').resolves({} as any)
 

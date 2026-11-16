@@ -364,7 +364,7 @@ export const PluginSettingHandler = {
   // CRISP has no voting mode and its percentages are out of 100, not ppm. `initialize` sets the E3 parameters without
   // an event, so they are read from the contract.
   crispSettings: async (parsedEvent: LogDescription, activeSetting: Setting | null, info: ILogInfo) => {
-    const onChain = await Web3Helper.getCrispSettings(info.address, info.network, info.blockNumber)
+    const onChain = await Web3Helper.getCrispE3Settings(info.address, info.network, info.blockNumber)
 
     return {
       minVoterVotingPower: parsedEvent.args.minVoterVotingPower.toString(),

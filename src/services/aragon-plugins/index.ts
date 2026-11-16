@@ -15,7 +15,7 @@ import { LogMultiSig } from '@services/aragon-plugins/logMultisig'
 import { LogSelectorPermission } from '@services/aragon-plugins/logSelectorPermission'
 import { LogSpp } from '@services/aragon-plugins/logSPP'
 import { LogTokenVoting } from '@services/aragon-plugins/logTokenVoting'
-import { TaskSchedulerState } from '@state/taskSchedulerState'
+import { TASK_CHECK_INTERVAL_MS, TaskSchedulerState } from '@state/taskSchedulerState'
 import {
   EnumConnection,
   EnumQueueName,
@@ -31,10 +31,6 @@ import {
 } from '@types'
 
 const llo = logger.logMeta.bind(null, { service: 'service:PluginSyncService' })
-
-// The scheduler only runs a task on a tick that lands after nextStartAt. A tick equal to the interval arrives a few
-// milliseconds early and gets skipped, which doubles the effective period, so the tick has to be much shorter.
-const TASK_CHECK_INTERVAL_MS = 5 * 1000
 
 const AragonPluginsService: IService & { pluginQueue: (params: IQueuePlugin) => Promise<void> } = {
   name: EnumServiceName.ARAGON_PLUGINS,

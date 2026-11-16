@@ -101,11 +101,11 @@ export const migrateCrispPlugin = async (plugin: Plugin): Promise<void> => {
     },
   })
 
-  await Models.Plugin.updateOne(
+  const updated: Plugin = await Models.Plugin.findOneAndUpdate(
     { id: plugin.id },
     { interfaceType: IPluginInterfaceType.crisp, isObjection: false, ...(tokenAddress && { tokenAddress }) },
+    { returnDocument: 'after' },
   )
-  const updated: Plugin = await Models.Plugin.findOne({ id: plugin.id })
 
   await PluginSlug.updateSlug(updated, updated.processKey)
 

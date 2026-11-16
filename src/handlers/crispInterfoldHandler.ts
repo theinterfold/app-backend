@@ -80,7 +80,7 @@ const forEachProposal = async (
 
 export const CrispInterfoldHandler = {
   // Reads and stores the plugin's Interfold coordinator when it is not stored yet
-  ensureInterfold: async (plugin: Plugin): Promise<HexAddress | undefined> => {
+  ensureInterfold: async (plugin: Plugin): Promise<HexAddress> => {
     if (plugin.interfoldAddress) return plugin.interfoldAddress
 
     const interfoldAddress = await CrispHelper.getInterfold(plugin.address, plugin.network)
@@ -124,7 +124,8 @@ export const CrispInterfoldHandler = {
   },
 
   // Stores the tally the plugin reports, in raw token units, and marks it published. Called when the round publishes
-  // its plaintext output and again at execution, when the stored tally is final. Never throws.
+  // its plaintext output and again at execution, when the stored tally is final. A failed read is logged and nothing
+  // is stored, so the tally stays unpublished and the sweep retries; only the final write can throw.
   syncTally: async (proposal: Proposal, plugin: Plugin) => {
     const { network, proposalIndex, e3Id } = proposal
     const context = { pluginAddress: plugin.address, proposalIndex, network }
@@ -142,13 +143,15 @@ export const CrispInterfoldHandler = {
       )
     }
 
+    if (!divisor) return
+
     await Models.Proposal.updateOne(
       { _id: proposal._id },
       {
         $set: {
           isTallyPublished: true,
-          'metrics.votesByOption': divisor ? buildVotesByOption(counts, divisor) : [],
-          ...(divisor && { votingPowerDivisor: divisor }),
+          'metrics.votesByOption': buildVotesByOption(counts, divisor),
+          votingPowerDivisor: divisor,
         },
       },
     )
